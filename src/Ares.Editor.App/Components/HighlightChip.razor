@@ -1,0 +1,33 @@
+@* What the 3D view highlights (a tag or a rule's coverage), with a button that clears it. *@
+@implements IDisposable
+@inject EditorSession Session
+
+@if (Session.Workspace is { } workspace && (Session.SelectedTag is not null || (Session.HighlightsRule && Session.SelectedRule is not null)))
+{
+    <div class="scene-highlight card" role="status">
+        @if (Session.HighlightsRule && Session.SelectedRule is { } rule)
+        {
+            <span class="muted">Rule</span>
+            <span class="scene-highlight-name" title="Containers this rule covers">@Display.RuleName(rule, workspace.Rules.Rules)</span>
+        }
+        else
+        {
+            <span class="muted">Tag</span>
+            <span class="scene-highlight-name" title="@Session.SelectedTag">@Session.SelectedTag</span>
+        }
+        <span class="legend-count">@Session.HighlightedIndices().Length</span>
+        <button class="quiet" aria-label="Clear the highlight" title="Clear the highlight" @onclick="Session.ClearHighlight">✕</button>
+    </div>
+}
+
+@code {
+    /// <summary>Stops listening to the session.</summary>
+    public void Dispose() => Session.Changed -= OnChanged;
+
+    protected override void OnInitialized()
+    {
+        Session.Changed += OnChanged;
+    }
+
+    private void OnChanged(EditorChanges changes) => _ = InvokeAsync(StateHasChanged);
+}

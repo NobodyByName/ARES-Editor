@@ -1,0 +1,202 @@
+@* The selected rule of loot-rules.json: what it covers and what it sets. *@
+
+@if (Session.SelectedRule is { } rule)
+{
+    int covered = Session.HighlightsRule ? Session.HighlightedIndices().Length : -1;
+    int coveredLoose = Session.HighlightsRule ? Session.HighlightedLooseIndices().Length : -1;
+    <section @key="rule" class="inspector-section">
+        <header class="section-header">
+            <h2>Rule #@(Rules.IndexOf(rule) + 1)</h2>
+            <button class="quiet" aria-label="Close the rule" @onclick="() => Session.SelectRule(null)">✕</button>
+        </header>
+
+        <div class="field">
+            <label for="rule-name">Name</label>
+            <input id="rule-name" value="@rule.Name" placeholder="@($"#{Rules.IndexOf(rule) + 1}")" @onchange="args => Edit(() => rule.Name = (args.Value as string)?.Trim())" />
+        </div>
+
+        @if (rule.SpawnChance is null && !rule.GroupFill.IsSet && rule.Loot is null && rule.RevealDelaySeconds is null)
+        {
+            <p class="warning">This rule sets nothing yet; the server refuses such a rule.</p>
+        }
+
+        <h3>Covers</h3>
+        <p class="hint">
+            @if (rule.Tags.Count == 0 && rule.Containers.Count == 0)
+            {
+                <span>No tags or containers: every container and loose item socket.</span>
+            }
+            else
+            {
+                <span>Containers and loose item sockets with one of these tags (or below), and the listed ones.</span>
+            }
+            @if (covered >= 0)
+            {
+                <span> @Display.Count(covered, "container") and @Display.Count(coveredLoose, "loose item socket") on this map.</span>
+            }
+            else
+            {
+                <button class="link-button" @onclick="() => Session.SelectRule(rule)">Highlight them</button>
+            }
+        </p>
+
+        <span class="field-label">Tags</span>
+        <div class="chips">
+            @foreach (string tag in rule.Tags)
+            {
+                bool known = Tree.Find(tag) is not null || Session.Workspace!.GameData.HasLooseItemTag(tag);
+                <span class="chip @(known ? null : "unknown")" title="@(known ? tag : "No container type or loose item socket has this tag or one below it")">
+                    @tag
+                    <button class="chip-remove" aria-label="@($"Remove {tag}")" @onclick="() => RemoveTag(rule, tag)">✕</button>
+                </span>
+            }
+        </div>
+        <div class="add-line">
+            <input list="all-tags" @bind="_newTag" placeholder="Socket.LootContainer.…" spellcheck="false" aria-label="Tag to add" />
+            <datalist id="all-tags">
+                @foreach (string tag in AllTags())
+                {
+                    <option value="@tag"></option>
+                }
+            </datalist>
+            <button disabled="@string.IsNullOrWhiteSpace(_newTag)" @onclick="() => AddTag(rule, _newTag)">Add</button>
+        </div>
+        @if (Session.SelectedTag is { } selectedTag && !rule.Tags.Contains(selectedTag, StringComparer.OrdinalIgnoreCase))
+        {
+            <button class="quiet add-row" @onclick="() => AddTag(rule, selectedTag)">+ Add selected tag @selectedTag</button>
+        }
+
+        <span class="field-label">Containers</span>
+        <div class="chips">
+            @foreach (string id in rule.Containers)
+            {
+                bool onMap = Session.Map?.Find(id) is not null;
+                bool loose = !onMap && Session.Map?.FindLooseItemSocket(id) is not null;
+                <span class="chip @(onMap || loose ? null : "unknown")"
+                      title="@(onMap ? $"{id} (click to focus)" : loose ? $"{id} (loose item socket, click to focus)" : $"{id} is not on this map")">
+                    <button class="chip-text" disabled="@(!onMap && !loose)" @onclick="() => Session.FocusContainer(id)">@ShortId(id)</button>
+                    <button class="chip-remove" aria-label="@($"Remove {id}")" @onclick="() => RemoveContainer(rule, id)">✕</button>
+                </span>
+            }
+        </div>
+        @if (Session.SelectedId is { } selected)
+        {
+            string kind = Session.SelectedContainer is null ? "loose item socket" : "container";
+            @if (rule.Containers.Contains(selected, StringComparer.Ordinal))
+            {
+                <p class="hint">The selected @kind is listed.</p>
+            }
+            else
+            {
+                <button class="quiet add-row" @onclick="() => AddContainer(rule, selected)">+ Add selected @kind</button>
+            }
+        }
+        else
+        {
+            <p class="hint">Select a container or loose item socket in the view to add it.</p>
+        }
+
+        <h3>Sets</h3>
+        <label>Spawn chance</label>
+        <div class="group-fill-row spawn-chance @(rule.SpawnChance is null ? "unset" : null)">
+            <input type="range" min="0" max="100" step="1" value="@Display.Number(SpawnPercent(rule.SpawnChance) ?? 0)"
+                   aria-label="Spawn chance in percent" title="Replaces the game's decision; ✕ keeps it"
+                   @onchange="args => SetSpawnPercent(rule, args.Value as string)" />
+            <NumberInput Value="SpawnPercent(rule.SpawnChance)" Optional="true" Min="0" Max="100" Placeholder="keep" Label="Spawn chance in percent" Class="group-fill-percent"
+                         Title="Percent, replaces the game's decision; empty keeps it" ValueChanged="value => Edit(() => rule.SpawnChance = value / 100)" />
+            <span class="group-fill-unit">%</span>
+            <button class="quiet remove" aria-label="Keep the game's spawn chance" title="Clear; keeps the game's decision"
+                    disabled="@(rule.SpawnChance is null)" @onclick="() => Edit(() => rule.SpawnChance = null)">✕</button>
+        </div>
+        <div class="setting-row">
+            <label>Reveal delay (s)</label>
+            <NumberInput Value="rule.RevealDelaySeconds" Optional="true" Min="0" Placeholder="class's own" Label="Reveal delay in seconds" Class="reveal-delay"
+                         Title="Seconds after a first search's hold; empty keeps the class's own" ValueChanged="value => Edit(() => rule.RevealDelaySeconds = value)" />
+        </div>
+
+        <GroupFillEditor Session="Session" Rule="rule" />
+
+        <RuleLootEditor Session="Session" Rule="rule" />
+    </section>
+}
+
+@code {
+    private string? _newTag;
+
+    /// <summary>The editor session.</summary>
+    [Parameter]
+    [EditorRequired]
+    public EditorSession Session { get; set; } = null!;
+
+    private ObjectList<LootRule> Rules => Session.Workspace!.Rules.Rules;
+
+    private LootTagTree Tree => Session.Workspace!.GameData.TagTree;
+
+    // A socket id is cell/actor/component/socket; the actor and socket tell containers apart.
+    private static string ShortId(string id)
+    {
+        string[] parts = id.Split('/');
+        return parts.Length >= 4 ? $"{parts[1]}/{parts[^1]}" : id.TrimStart('/');
+    }
+
+    // The container tags in tree order, then the loose item tags of every map and the tags above them that the tree lacks.
+    private IEnumerable<string> AllTags()
+    {
+        Stack<LootTagNode> pending = new(Tree.Roots.Reverse());
+        while (pending.TryPop(out LootTagNode? node))
+        {
+            yield return node.Tag;
+            foreach (LootTagNode child in node.Children.Reverse())
+            {
+                pending.Push(child);
+            }
+        }
+
+        SortedSet<string> loose = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string tag in Session.Workspace!.GameData.Maps.SelectMany(map => map.LooseItemTags))
+        {
+            for (string current = tag; current.Length > 0 && Tree.Find(current) is null; current = current.LastIndexOf('.') is var dot and > 0 ? current[..dot] : string.Empty)
+            {
+                loose.Add(current);
+            }
+        }
+
+        foreach (string tag in loose)
+        {
+            yield return tag;
+        }
+    }
+
+    private static double? SpawnPercent(double? chance) => chance is { } set ? Math.Round(set * 100, 2) : null;
+
+    private void SetSpawnPercent(LootRule rule, string? text)
+    {
+        if (Display.TryParse(text, out double percent))
+        {
+            Edit(() => rule.SpawnChance = Math.Clamp(percent, 0, 100) / 100);
+        }
+    }
+
+    private void Edit(Action change)
+    {
+        change();
+        Session.Edited();
+    }
+
+    private void AddTag(LootRule rule, string? tag)
+    {
+        string trimmed = tag?.Trim() ?? string.Empty;
+        if (trimmed.Length > 0 && !rule.Tags.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+        {
+            Edit(() => rule.Tags = [.. rule.Tags, trimmed]);
+        }
+
+        _newTag = null;
+    }
+
+    private void RemoveTag(LootRule rule, string tag) => Edit(() => rule.Tags = [.. rule.Tags.Where(other => !string.Equals(other, tag, StringComparison.Ordinal))]);
+
+    private void AddContainer(LootRule rule, string id) => Edit(() => rule.Containers = [.. rule.Containers, id]);
+
+    private void RemoveContainer(LootRule rule, string id) => Edit(() => rule.Containers = [.. rule.Containers.Where(other => !string.Equals(other, id, StringComparison.Ordinal))]);
+}

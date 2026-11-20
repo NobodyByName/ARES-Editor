@@ -1,0 +1,257 @@
+@* One list of a contents profile: its only matches, weights or additions, with the inherited ones greyed. *@
+
+<span class="field-label">@Title <span class="hint">(@Help)</span></span>
+@switch (Kind)
+{
+    case ProfileList.Only:
+        if (Profile?.Only is { } only)
+        {
+            <div class="chips">
+                @foreach (LootMatch match in only)
+                {
+                    <span class="chip" title="@match.Text">
+                        @ProfileTarget.Label(match, Items)
+                        <button class="chip-remove" aria-label="@($"Remove {match.Text}")" @onclick="() => Edit(() => Profile.RemoveOnly(match))">✕</button>
+                    </span>
+                }
+            </div>
+            @if (Inherited.Only is { } replaced)
+            {
+                <p class="hint">Replaces the list of @replaced.Profile.Name.</p>
+            }
+        }
+        else if (Inherited.Only is { } inherited)
+        {
+            <div class="chips">
+                @foreach (LootMatch match in inherited.Value)
+                {
+                    <span class="chip inherited-chip" title="@($"{match.Text}, from {inherited.Profile.Name}")">@ProfileTarget.Label(match, Items)</span>
+                }
+            </div>
+            <p class="hint">From @inherited.Profile.Name. A match added here starts this profile's own list, which replaces it.</p>
+        }
+        else
+        {
+            <p class="hint">Every item the source offers.</p>
+        }
+
+        break;
+    case ProfileList.Weights:
+        IReadOnlyList<LootWeight> weights = Profile?.Weights ?? (IReadOnlyList<LootWeight>)[];
+        ProfileValue<LootWeight>[] inheritedWeights = [.. Inherited.Weights.Where(entry => weights.All(own => own.Key != entry.Value.Key))];
+        if (weights.Count + inheritedWeights.Length == 0)
+        {
+            <p class="hint">No weights: every item counts 1.</p>
+        }
+        else
+        {
+            <table class="grid-table profile-table">
+                <tbody>
+                    @foreach (LootWeight weight in weights)
+                    {
+                        <tr @key="weight">
+                            <td title="@weight.Text">@ProfileTarget.Label(weight, Items)</td>
+                            <td><NumberInput Value="weight.Multiplier" Min="0" Label="@($"Multiplier of {weight.Text}")" Title="Multiplier on the pick weight; 0 removes the items"
+                                             ValueChanged="value => Edit(() => weight.Multiplier = value ?? 1)" /></td>
+                            <td><button class="quiet remove" aria-label="@($"Remove {weight.Text}")" @onclick="() => Edit(() => Profile!.RemoveWeight(weight))">✕</button></td>
+                        </tr>
+                    }
+                    @foreach (ProfileValue<LootWeight> entry in inheritedWeights)
+                    {
+                        <tr @key="entry.Value" class="inherited-row">
+                            <td title="@($"{entry.Value.Text}, from {entry.Profile.Name}")">@ProfileTarget.Label(entry.Value, Items)</td>
+                            <td><span class="inherited" title="@($"From {entry.Profile.Name}")">×@Display.Number(entry.Value.Multiplier)</span></td>
+                            <td>
+                                @if (Profile is not null)
+                                {
+                                    <button class="quiet add" title="Give this profile its own weight for it"
+                                            @onclick="() => Edit(() => Profile.AddWeight(entry.Value.DropTag, entry.Value.Item, entry.Value.Multiplier))">+</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        break;
+    default:
+        IReadOnlyList<LootAddition> additions = Profile?.Additions ?? (IReadOnlyList<LootAddition>)[];
+        ProfileValue<LootAddition>[] inheritedAdditions = [.. Inherited.Additions.Where(entry => additions.All(own => own.Key != entry.Value.Key))];
+        if (additions.Count + inheritedAdditions.Length == 0)
+        {
+            <p class="hint">Nothing added.</p>
+        }
+        else
+        {
+            <table class="grid-table profile-table">
+                <tbody>
+                    @foreach (LootAddition addition in additions)
+                    {
+                        <tr @key="addition">
+                            <td title="@addition.Text">@ProfileTarget.Label(addition, Items)</td>
+                            <td class="range">
+                                <NumberInput Value="addition.Amount.Min" Integer="true" Min="1" Label="Smallest stack"
+                                             ValueChanged="value => SetAmount(addition, value, addition.Amount.Max, minChanged: true)" />
+                                <span>–</span>
+                                <NumberInput Value="addition.Amount.Max" Integer="true" Min="1" Label="Largest stack"
+                                             ValueChanged="value => SetAmount(addition, addition.Amount.Min, value, minChanged: false)" />
+                            </td>
+                            <td>
+                                <select class="tier-select" aria-label="Tier" title="Tier the item counts in" @onchange="args => SetTier(addition, args.Value as string)">
+                                    <option value="" selected="@(addition.Tier is null)">own tier</option>
+                                    @foreach (string tier in Tiers)
+                                    {
+                                        <option value="@tier" selected="@(addition.Tier == tier)">@tier</option>
+                                    }
+                                </select>
+                            </td>
+                            <td><button class="quiet remove" aria-label="@($"Remove {addition.Text}")" @onclick="() => Edit(() => Profile!.RemoveAddition(addition))">✕</button></td>
+                        </tr>
+                    }
+                    @foreach (ProfileValue<LootAddition> entry in inheritedAdditions)
+                    {
+                        <tr @key="entry.Value" class="inherited-row">
+                            <td title="@($"{entry.Value.Text}, from {entry.Profile.Name}")">@ProfileTarget.Label(entry.Value, Items)</td>
+                            <td class="inherited">×@Amount(entry.Value.Amount)</td>
+                            <td class="inherited">@(entry.Value.Tier ?? "own tier")</td>
+                            <td>
+                                @if (Profile is not null)
+                                {
+                                    <button class="quiet add" title="Give this profile its own addition of it" @onclick="() => Override(entry.Value)">+</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        break;
+}
+@if (Profile is not null)
+{
+    <div class="add-line">
+        <select class="match-kind" aria-label="Match by" @bind="_matchBy">
+            <option value="item">Item</option>
+            <option value="dropTag">Drop tag</option>
+        </select>
+        @if (_matchBy == "item")
+        {
+            <ItemPicker Items="Items" ClearOnPick="true" Placeholder="Type part of an item's name…" Label="@($"Item to add to {Title}")"
+                        ValueChanged="name => Add(null, name)" />
+        }
+        else
+        {
+            <input list="@DropTagList" @bind="_dropTag" placeholder="Item.Drop.…" spellcheck="false" aria-label="@($"Drop tag to add to {Title}")" />
+            <button disabled="@string.IsNullOrWhiteSpace(_dropTag)" @onclick="() => Add(_dropTag!.Trim(), null)">Add</button>
+        }
+    </div>
+}
+
+@code {
+    private string _matchBy = "item";
+    private string? _dropTag;
+
+    /// <summary>The editor session.</summary>
+    [Parameter]
+    [EditorRequired]
+    public EditorSession Session { get; set; } = null!;
+
+    /// <summary>The profile edited, or null when the target has none yet (the inherited entries still show).</summary>
+    [Parameter]
+    public LootProfile? Profile { get; set; }
+
+    /// <summary>What the target inherits.</summary>
+    [Parameter]
+    [EditorRequired]
+    public MergedProfile Inherited { get; set; } = null!;
+
+    /// <summary>Which list.</summary>
+    [Parameter]
+    public ProfileList Kind { get; set; }
+
+    /// <summary>The items a match may name.</summary>
+    [Parameter]
+    [EditorRequired]
+    public IReadOnlyList<ContainerItem> Items { get; set; } = [];
+
+    /// <summary>The tier names of the contents file.</summary>
+    [Parameter]
+    [EditorRequired]
+    public IReadOnlyList<string> Tiers { get; set; } = [];
+
+    /// <summary>Id of the datalist of drop tags.</summary>
+    [Parameter]
+    [EditorRequired]
+    public string DropTagList { get; set; } = string.Empty;
+
+    private string Title => Kind switch
+    {
+        ProfileList.Only => "Only",
+        ProfileList.Weights => "Weights",
+        _ => "Add",
+    };
+
+    private string Help => Kind switch
+    {
+        ProfileList.Only => "keeps only the items matching one of these",
+        ProfileList.Weights => "multiplier on the pick weight of matching items; 0 removes them",
+        _ => "items the source does not offer, whatever their placement lists say",
+    };
+
+    private static string Amount(LootCount amount) =>
+        amount.Min == amount.Max ? Display.Number(amount.Min) : $"{Display.Number(amount.Min)}–{Display.Number(amount.Max)}";
+
+    private void Edit(Action change)
+    {
+        change();
+        Session.Edited();
+    }
+
+    private void Add(string? dropTag, string? item)
+    {
+        if (Profile is not { } profile || string.IsNullOrWhiteSpace(dropTag ?? item))
+        {
+            return;
+        }
+
+        switch (Kind)
+        {
+            case ProfileList.Only:
+                Edit(() => profile.AddOnly(dropTag, item));
+                break;
+            case ProfileList.Weights:
+                Edit(() => profile.AddWeight(dropTag, item, 1));
+                break;
+            default:
+                Edit(() => profile.AddAddition(dropTag, item, 1, 1));
+                break;
+        }
+
+        _dropTag = null;
+    }
+
+    private void Override(LootAddition inherited)
+    {
+        Edit(() =>
+        {
+            LootAddition own = Profile!.AddAddition(inherited.DropTag, inherited.Item, inherited.Amount.Min, inherited.Amount.Max);
+            own.Tier = inherited.Tier;
+        });
+    }
+
+    private void SetAmount(LootAddition addition, double? min, double? max, bool minChanged)
+    {
+        if (RuleLootEditor.Range(min, max, minChanged) is { } range)
+        {
+            Edit(() =>
+            {
+                addition.Amount.Min = range.Min;
+                addition.Amount.Max = range.Max;
+            });
+        }
+    }
+
+    private void SetTier(LootAddition addition, string? tier) => Edit(() => addition.Tier = string.IsNullOrEmpty(tier) ? null : tier);
+}

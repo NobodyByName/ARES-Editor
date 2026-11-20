@@ -1,0 +1,188 @@
+@* The header's controls: open a server, pick the map, save or reload the loot files. *@
+@implements IAsyncDisposable
+@inject EditorSession Session
+@inject FolderPicker Folders
+@inject IJSRuntime Js
+
+<div class="server-bar">
+    @if (Session.Workspace is { } workspace)
+    {
+        <span class="server-info" title="Content: @workspace.Location.ContentDirectory&#10;Game data: @workspace.GameData.Directory">
+            <span class="server-name">@ServerName(workspace.Location)</span>
+            <span class="build">Game build @workspace.GameData.Manifest.GameBuildId</span>
+        </span>
+        @if (workspace.GameData.Maps.Count > 0)
+        {
+            <select class="map-select" aria-label="Map" value="@Session.Map?.Name" @onchange="args => Session.SelectMap(args.Value as string ?? string.Empty)">
+                @foreach (MapLoot map in workspace.GameData.Maps)
+                {
+                    <option value="@map.Name">@map.Name</option>
+                }
+            </select>
+        }
+        else
+        {
+            <span class="hint">The game data has no maps.</span>
+        }
+    }
+
+    <button disabled="@Session.IsOpening" @onclick="ChooseServerAsync">@(Session.IsOpening ? "Opening…" : "Open server…")</button>
+    <button class="quiet" aria-expanded="@(_showFolders ? "true" : "false")" @onclick="() => _showFolders = !_showFolders">Folders…</button>
+
+    @if (Session.Workspace is not null)
+    {
+        <span class="bar-gap"></span>
+        @if (Session.IsDirty)
+        {
+            <span class="dirty" title="Edits not saved yet">● Unsaved</span>
+        }
+        else if (Session.Notice is { } notice)
+        {
+            <span class="saved" role="status" title="New raids use the saved files; running raids keep the old rules.">✓ @notice</span>
+        }
+        <button class="quiet" disabled="@Session.IsOpening" @onclick="() => Confirm(ReloadAsync)" title="Discard edits and read the loot files again">Reload</button>
+        <button class="primary" disabled="@(!Session.IsDirty)" @onclick="Session.Save" title="Save the loot files (Ctrl+S)">Save</button>
+    }
+</div>
+
+@if (_showFolders)
+{
+    <div class="folders-popover card">
+        <div class="field">
+            <label for="content-folder">Content folder</label>
+            <input id="content-folder" @bind="_contentFolder" placeholder="…/ARES-Server/content" spellcheck="false" />
+        </div>
+        <div class="field">
+            <label for="gamedata-folder">Game data folder</label>
+            <input id="gamedata-folder" @bind="_gameDataFolder" placeholder="The folder ARES-GameDataExtract wrote" spellcheck="false" />
+        </div>
+        <p class="hint">Use these when the content and game data are not where the server folder's ares-host.conf says.</p>
+        <div class="row">
+            <button class="primary" disabled="@(string.IsNullOrWhiteSpace(_contentFolder) || string.IsNullOrWhiteSpace(_gameDataFolder) || Session.IsOpening)"
+                    @onclick="() => Confirm(OpenFoldersAsync)">Open folders</button>
+            <button class="quiet" @onclick="() => _showFolders = false">Close</button>
+        </div>
+    </div>
+}
+
+@if (_pending is not null)
+{
+    <div class="confirm-popover card" role="alertdialog" aria-label="Discard unsaved edits">
+        <p>Discard the unsaved edits?</p>
+        <div class="row">
+            <button class="danger" @onclick="RunPendingAsync">Discard</button>
+            <button class="quiet" @onclick="() => _pending = null">Cancel</button>
+        </div>
+    </div>
+}
+
+@code {
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<ServerBar>? _self;
+    private bool _showFolders;
+    private string? _contentFolder;
+    private string? _gameDataFolder;
+    private string? _chosenServer;
+    private Func<Task>? _pending;
+
+    /// <summary>Saves on Ctrl+S when there are unsaved edits.</summary>
+    [JSInvokable]
+    public Task OnSaveShortcut() => InvokeAsync(() =>
+    {
+        if (Session.IsDirty)
+        {
+            Session.Save();
+        }
+    });
+
+    public async ValueTask DisposeAsync()
+    {
+        Session.Changed -= OnChanged;
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.InvokeVoidAsync("unregisterSaveShortcut");
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // The window is closing.
+            }
+        }
+
+        _self?.Dispose();
+    }
+
+    protected override void OnInitialized()
+    {
+        Session.Changed += OnChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _self = DotNetObjectReference.Create(this);
+            _module = await Js.InvokeAsync<IJSObjectReference>("import", "./js/editor.js");
+            await _module.InvokeVoidAsync("registerSaveShortcut", _self);
+        }
+    }
+
+    private static string ServerName(ServerLocation location) =>
+        location.ConfigFile is { } config ? Path.GetFileName(Path.GetDirectoryName(config)) ?? config : Path.GetFileName(Path.GetDirectoryName(location.ContentDirectory)) ?? location.ContentDirectory;
+
+    private void OnChanged(EditorChanges changes)
+    {
+        if (changes.HasFlag(EditorChanges.Workspace) && Session.Workspace is { } workspace)
+        {
+            _contentFolder = workspace.Location.ContentDirectory;
+            _gameDataFolder = workspace.GameData.Directory;
+        }
+
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ChooseServerAsync()
+    {
+        string? start = Session.Workspace is { } workspace ? Path.GetDirectoryName(workspace.Location.ContentDirectory) : null;
+        string? folder = await Folders.PickFolderAsync("Choose the ARES-Server folder", start);
+        if (string.IsNullOrEmpty(folder))
+        {
+            return;
+        }
+
+        _chosenServer = folder;
+        await Confirm(OpenChosenServerAsync);
+    }
+
+    private Task OpenChosenServerAsync() => _chosenServer is null ? Task.CompletedTask : Session.OpenServerAsync(_chosenServer);
+
+    private Task OpenFoldersAsync() => Session.OpenDirectoriesAsync(_contentFolder!.Trim(), _gameDataFolder!.Trim());
+
+    private Task ReloadAsync() => Session.ReloadAsync();
+
+    // Runs an action that replaces the open documents, after a confirmation when they have unsaved edits.
+    private Task Confirm(Func<Task> action)
+    {
+        _showFolders = false;
+        if (Session.IsDirty)
+        {
+            _pending = action;
+            return Task.CompletedTask;
+        }
+
+        _pending = null;
+        return action();
+    }
+
+    private async Task RunPendingAsync()
+    {
+        Func<Task>? action = _pending;
+        _pending = null;
+        if (action is not null)
+        {
+            await action();
+        }
+    }
+}

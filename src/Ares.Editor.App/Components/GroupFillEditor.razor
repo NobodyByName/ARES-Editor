@@ -1,0 +1,122 @@
+@* A rule's group fill: for each group of sockets it decides, the chance of each number of filled sockets, as linked
+   sliders that always total 100 %. Dragging previews the other rows; the file changes when a value is let go. *@
+
+<span class="field-label">Group fill <span class="hint">(sockets only)</span></span>
+@if (Rule.GroupFill.IsSet)
+{
+    LootFillGroup[] groups = Session.FillGroups.Of(Rule);
+    LootFillSummary summary = Session.FillGroups.Summarize(Rule);
+    GroupFillShares shares = _preview ?? GroupFillShares.Of(Rule.GroupFill);
+    IReadOnlyList<FillAreaColumn> areas = FillDisplay.AreaColumns(groups, shares);
+    <div class="group-fill">
+        <p class="group-fill-header">@FillDisplay.Header(groups, summary)</p>
+        <p class="hint">@FillDisplay.Stats(summary)</p>
+        @foreach (string problem in GroupFillShares.Problems(Rule.GroupFill))
+        {
+            <p class="warning">The server refuses this: @problem. Moving a slider rewrites the chances.</p>
+        }
+        @if (areas.Count > 0)
+        {
+            <div class="group-fill-row group-fill-columns">
+                <span class="group-fill-label"></span>
+                <span class="group-fill-spacer"></span>
+                <span class="group-fill-column-base" title="The chances outside every area with a loot value: the sliders set these">Outside</span>
+                @foreach (FillAreaColumn area in areas)
+                {
+                    <span class="group-fill-area" title="@area.Title">@area.Heading</span>
+                }
+                <span class="group-fill-remove-spacer"></span>
+            </div>
+        }
+        @for (int position = 0; position < shares.Shares.Count; position++)
+        {
+            FillShare share = shares.Shares[position];
+            string label = $"{share.Count} filled";
+            string? beyond = FillDisplay.Beyond(share.Count, summary);
+            <div class="group-fill-row" @key="share.Key">
+                <span class="group-fill-label">
+                    @label
+                    @if (beyond is not null)
+                    {
+                        <span class="group-fill-warning" title="@beyond">⚠</span>
+                    }
+                </span>
+                <input type="range" min="0" max="100" step="@Display.Number(GroupFillShares.Step)" value="@Display.Number(FillDisplay.Rounded(share.Percent))"
+                       aria-label="@($"Chance of {label}")" disabled="@(shares.Shares.Count == 1)"
+                       @oninput="args => Preview(share.Count, args.Value as string)" @onchange="args => Commit(share.Count, args.Value as string)" />
+                <NumberInput Value="FillDisplay.Rounded(share.Percent)" Min="0" Max="100" Label="@($"Chance of {label} in percent")" Class="group-fill-percent"
+                             Title="Chance in percent; the other rows follow so the total stays 100" ValueChanged="value => Commit(share.Count, value)" />
+                <span class="group-fill-unit">%</span>
+                @foreach (FillAreaColumn area in areas)
+                {
+                    <span class="group-fill-area" title="@($"{label} in {area.Area} areas")">@FillDisplay.Percent(area.Shares[position].Percent)</span>
+                }
+                <button class="quiet remove" aria-label="@($"Remove {label}")" title="Remove; the others share its chance" @onclick="() => Apply(shares.Without(share.Count))">✕</button>
+            </div>
+            @if (beyond is not null)
+            {
+                <p class="hint group-fill-beyond">@beyond</p>
+            }
+        }
+        <button class="quiet add-row" @onclick="() => Apply(shares.Add())">+ Add @shares.NextCount filled</button>
+    </div>
+}
+else
+{
+    <button class="quiet add-row" title="Decide per group how many of its sockets get loot" @onclick="() => Apply(GroupFillShares.Of(Rule.GroupFill).Add())">+ Set a group fill</button>
+}
+
+@code {
+    private GroupFillShares? _preview;
+
+    /// <summary>The editor session.</summary>
+    [Parameter]
+    [EditorRequired]
+    public EditorSession Session { get; set; } = null!;
+
+    /// <summary>The rule.</summary>
+    [Parameter]
+    [EditorRequired]
+    public LootRule Rule { get; set; } = null!;
+
+    protected override void OnParametersSet() => _preview = null;
+
+    // While a slider moves: the chances it would give, from the file's chances (the file is not changed).
+    private void Preview(int count, string? text)
+    {
+        if (Display.TryParse(text, out double percent))
+        {
+            _preview = GroupFillShares.Of(Rule.GroupFill).With(count, percent);
+        }
+    }
+
+    private void Commit(int count, string? text)
+    {
+        if (Display.TryParse(text, out double percent))
+        {
+            Commit(count, percent);
+        }
+        else
+        {
+            _preview = null;
+        }
+    }
+
+    private void Commit(int count, double? percent)
+    {
+        GroupFillShares current = GroupFillShares.Of(Rule.GroupFill);
+        GroupFillShares changed = percent is { } value ? current.With(count, value) : current;
+        _preview = null;
+        if (!ReferenceEquals(changed, current))
+        {
+            Apply(changed);
+        }
+    }
+
+    private void Apply(GroupFillShares shares)
+    {
+        _preview = null;
+        shares.WriteTo(Rule.GroupFill);
+        Session.Edited();
+    }
+}

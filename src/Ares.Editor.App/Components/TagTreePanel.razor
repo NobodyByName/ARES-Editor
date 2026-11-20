@@ -1,0 +1,115 @@
+@* The container tag hierarchy with the map's counts and each tag's own spawn chance from loot-spawn.json. *@
+
+<details class="side-section" open>
+    <summary>Tags</summary>
+    <p class="hint">Click a tag to highlight its containers and open its contents profile. Chance: the tag's own <code>chances</code> entry; grey values are inherited. P: the tag has a profile.</p>
+    <div class="tag-tree" role="tree">
+        @foreach (LootTagNode root in Tree.Roots)
+        {
+            @Node(root, 0)
+        }
+    </div>
+</details>
+
+@code {
+    private readonly HashSet<string> _expanded = new(StringComparer.OrdinalIgnoreCase);
+    private LootTagTree? _expandedTree;
+
+    /// <summary>The editor session.</summary>
+    [Parameter]
+    [EditorRequired]
+    public EditorSession Session { get; set; } = null!;
+
+    private LootTagTree Tree => Session.Workspace!.GameData.TagTree;
+
+    private LootSpawnDocument Spawn => Session.Workspace!.Spawn;
+
+    protected override void OnParametersSet()
+    {
+        // Each new tree opens down to its categories.
+        if (ReferenceEquals(_expandedTree, Tree))
+        {
+            return;
+        }
+
+        _expandedTree = Tree;
+        _expanded.Clear();
+        IReadOnlyList<LootTagNode> level = Tree.Roots;
+        while (level is [{ Children.Count: > 0 } single])
+        {
+            _expanded.Add(single.Tag);
+            level = single.Children;
+        }
+    }
+
+    private RenderFragment Node(LootTagNode node, int depth) =>
+        @<div @key="node.Tag" role="treeitem" aria-expanded="@(node.Children.Count == 0 ? null : _expanded.Contains(node.Tag) ? "true" : "false")">
+            @{
+                int count = Session.TagCounts.GetValueOrDefault(node.Tag);
+                KeyValuePair<string, double>? chance = LootMatching.ChanceOf(Spawn, node.Tag);
+                bool own = chance is { } entry && string.Equals(entry.Key, node.Tag, StringComparison.OrdinalIgnoreCase);
+                bool selected = string.Equals(Session.SelectedTag, node.Tag, StringComparison.OrdinalIgnoreCase);
+            }
+            <div class="tree-row @(selected ? "selected" : null) @(count == 0 ? "unused" : null)" style="padding-left: @(depth * 12)px"
+                 title="@node.Tag" @onclick="() => Session.SelectTag(selected ? null : node.Tag)">
+                @if (node.Children.Count > 0)
+                {
+                    <button class="twisty" aria-label="@(_expanded.Contains(node.Tag) ? "Collapse" : "Expand")" @onclick="() => Toggle(node)" @onclick:stopPropagation="true">
+                        @(_expanded.Contains(node.Tag) ? "▾" : "▸")
+                    </button>
+                }
+                else
+                {
+                    <span class="twisty"></span>
+                }
+                <span class="tree-label">@node.Segment</span>
+                @if (Session.Workspace!.Contents.Profiles.FirstOrDefault(known => known.Tag is { } profileTag && string.Equals(profileTag, node.Tag, StringComparison.OrdinalIgnoreCase)) is { } profile)
+                {
+                    <span class="profile-mark" title="@($"Contents profile {profile.Name}")">P</span>
+                }
+                <span class="count">@count</span>
+                <span class="tree-chance" @onclick:stopPropagation="true">
+                    @if (own)
+                    {
+                        <NumberInput Value="chance!.Value.Value" Optional="true" Min="0" Max="1" Label="@($"Chance of {node.Tag}")"
+                                     Title="Own chance (0 to 1); clear to inherit" ValueChanged="value => SetChance(chance.Value.Key, value)" />
+                        <button class="quiet remove" title="Remove the tag's own chance" @onclick="() => SetChance(chance.Value.Key, null)">✕</button>
+                    }
+                    else
+                    {
+                        <span class="inherited" title="@(chance is { } parent ? $"Inherited from {parent.Key}" : "No chance applies: 0")">@Display.Number(chance?.Value ?? 0)</span>
+                        <button class="quiet add" title="Give the tag its own chance" @onclick="() => SetChance(node.Tag, chance?.Value ?? 0)">+</button>
+                    }
+                </span>
+            </div>
+            @if (_expanded.Contains(node.Tag))
+            {
+                @foreach (LootTagNode child in node.Children)
+                {
+                    @Node(child, depth + 1)
+                }
+            }
+        </div>;
+
+    private void Toggle(LootTagNode node)
+    {
+        if (!_expanded.Remove(node.Tag))
+        {
+            _expanded.Add(node.Tag);
+        }
+    }
+
+    private void SetChance(string key, double? value)
+    {
+        if (value is { } set)
+        {
+            Spawn.Chances.Set(key, set);
+        }
+        else
+        {
+            Spawn.Chances.Remove(key);
+        }
+
+        Session.Edited();
+    }
+}

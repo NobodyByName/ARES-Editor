@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Ares.Editor.App/Ares.Editor.App.csproj" />
+    <Project Path="src/Ares.Editor.Core/Ares.Editor.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Ares.Editor.Core.Tests/Ares.Editor.Core.Tests.csproj" />
+  </Folder>
+</Solution>

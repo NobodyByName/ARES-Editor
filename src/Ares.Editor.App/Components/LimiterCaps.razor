@@ -1,0 +1,68 @@
+@* The loot placement limiters that cap a socket, with the entries that cap it; clicking one shows it in the view and
+   opens it in the View box. *@
+@inject SceneOptions Options
+
+@{
+    (int Index, IReadOnlyList<LootLimit> Limits)[] capping = LimiterDisplay.Capping(Map, Location, Tag);
+}
+<h3>Limiters <span class="count">@capping.Length</span></h3>
+@if (capping.Length == 0)
+{
+    <p class="hint">No limiter caps this socket.</p>
+}
+else
+{
+    <ul class="limiter-caps">
+        @foreach ((int index, IReadOnlyList<LootLimit> limits) in capping)
+        {
+            LootLimiter limiter = Map.Limiters[index];
+            <li>
+                <button class="chip link" title="Show this limiter in the view" @onclick="() => Show(index)">@LimiterDisplay.Name(Map, limiter)</button>
+                @foreach (LootLimit limit in limits)
+                {
+                    <span class="limiter-cap" title="@limit.Tag">@LimiterDisplay.ShortTag(limit.Tag): @LimiterDisplay.Cap(limit)</span>
+                }
+                @if (limiter.DataLayer is { } layer)
+                {
+                    <span class="muted" title="@layer">only with @DataLayerNames.Label(layer)</span>
+                }
+            </li>
+        }
+    </ul>
+    <p class="hint">@Hint()</p>
+}
+
+@code {
+    /// <summary>The socket's map.</summary>
+    [Parameter]
+    [EditorRequired]
+    public MapLoot Map { get; set; } = null!;
+
+    /// <summary>The socket's location.</summary>
+    [Parameter]
+    public WorldVector Location { get; set; }
+
+    /// <summary>The socket's tag.</summary>
+    [Parameter]
+    [EditorRequired]
+    public string Tag { get; set; } = null!;
+
+    /// <summary>Whether the spawn settings turn the limiters on.</summary>
+    [Parameter]
+    public bool Enabled { get; set; }
+
+    /// <summary>Whether a rule decides the socket (a spawn chance or a group fill), which no limiter stops.</summary>
+    [Parameter]
+    public bool RuleDecides { get; set; }
+
+    private string Hint() =>
+        !Enabled ? "Limiters are off in the spawn settings, so none of these caps applies."
+        : RuleDecides ? "A rule decides this socket, so these caps do not stop it and it does not count towards them."
+        : "Once that many sockets of the tag inside a limiter got loot in a raid, the rest stay empty.";
+
+    private void Show(int index)
+    {
+        Options.SetLimitersVisible(true);
+        Options.HighlightLimiter(index);
+    }
+}

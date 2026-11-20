@@ -1,0 +1,158 @@
+@* The extra stack of a contents profile: its chance and entries, each inherited until the profile sets it. *@
+
+@{
+    double inheritedChance = Inherited.ExtraChance?.Value ?? Root.ExtraStack.Chance;
+    string chanceSource = Inherited.ExtraChance is { } chanceFrom ? $"from {chanceFrom.Profile.Name}" : "the file's default";
+    IReadOnlyList<LootTypeEntry> inheritedEntries = Inherited.ExtraEntries?.Value ?? [.. Root.ExtraStack.Entries];
+    string entriesSource = Inherited.ExtraEntries is { } entriesFrom ? $"from {entriesFrom.Profile.Name}" : "the file's default";
+}
+<span class="field-label">Extra stack</span>
+<label class="check">
+    <input type="checkbox" checked="@(Profile?.ExtraStack is not null)" disabled="@(Profile is null)" @onchange="args => Toggle(args.Value is true)" />
+    <span>Set here <span class="hint">(every container this profile covers may get it, also where its pool has none)</span></span>
+</label>
+@if (Profile?.ExtraStack is { } extra)
+{
+    <div class="setting-row">
+        <label>Chance</label>
+        <span class="setting-value">
+            @if (extra.Chance is { } chance)
+            {
+                <NumberInput Value="chance" Optional="true" Min="0" Max="1" Label="Extra stack chance" Title="Chance from 0 to 1; 0 turns it off; clear to inherit"
+                             ValueChanged="value => Edit(() => extra.Chance = value)" />
+                <button class="quiet remove" title="Inherit the chance" @onclick="() => Edit(() => extra.Chance = null)">✕</button>
+            }
+            else
+            {
+                <span class="inherited" title="@chanceSource">@Display.Number(inheritedChance)</span>
+                <button class="quiet add" title="Give this profile its own chance" @onclick="() => Edit(() => extra.Chance = inheritedChance)">+</button>
+            }
+        </span>
+    </div>
+    @if (extra.Entries is { } entries)
+    {
+        <table class="grid-table profile-table">
+            <thead><tr><th>Drop tag</th><th>Amount</th><th>Weight</th><th></th></tr></thead>
+            <tbody>
+                @foreach (LootTypeEntry entry in entries)
+                {
+                    <tr @key="entry">
+                        <td><input list="@DropTagList" value="@entry.DropTag" spellcheck="false" aria-label="Drop tag" @onchange="args => SetDropTag(entry, args.Value as string)" /></td>
+                        <td class="range">
+                            <NumberInput Value="entry.Amount.Min" Integer="true" Min="1" Label="Smallest stack" ValueChanged="value => SetAmount(entry, value, entry.Amount.Max, minChanged: true)" />
+                            <span>–</span>
+                            <NumberInput Value="entry.Amount.Max" Integer="true" Min="1" Label="Largest stack" ValueChanged="value => SetAmount(entry, entry.Amount.Min, value, minChanged: false)" />
+                        </td>
+                        <td><NumberInput Value="entry.Weight" Min="0" Label="Weight" ValueChanged="value => Edit(() => entry.Weight = value ?? 1)" /></td>
+                        <td><button class="quiet remove" aria-label="@($"Remove {entry.DropTag}")" @onclick="() => Edit(() => entries.Remove(entry))">✕</button></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <div class="add-line">
+            <input list="@DropTagList" @bind="_newEntry" placeholder="Item.Drop.…" spellcheck="false" aria-label="Drop tag of a new extra stack entry" />
+            <button disabled="@string.IsNullOrWhiteSpace(_newEntry)" @onclick="AddEntry">Add</button>
+        </div>
+        <button class="quiet remove add-row" @onclick="() => Edit(extra.RemoveEntries)">Inherit the entries (@entriesSource)</button>
+    }
+    else
+    {
+        <p class="hint">Entries @entriesSource: @EntriesText(inheritedEntries)</p>
+        <button class="quiet add-row" @onclick="() => Edit(() => extra.SetEntries(inheritedEntries))">+ Own entries (start from these)</button>
+    }
+}
+else
+{
+    <p class="hint">
+        Chance @Display.Number(inheritedChance) (@chanceSource); entries @entriesSource: @EntriesText(inheritedEntries).
+        @(Inherited.SetsExtraStack ? "A profile above gives it to every container it covers." : "Only containers whose pool allows it get it.")
+    </p>
+}
+
+@code {
+    private string? _newEntry;
+
+    /// <summary>The editor session.</summary>
+    [Parameter]
+    [EditorRequired]
+    public EditorSession Session { get; set; } = null!;
+
+    /// <summary>The profile edited, or null when the target has none yet.</summary>
+    [Parameter]
+    public LootProfile? Profile { get; set; }
+
+    /// <summary>What the target inherits.</summary>
+    [Parameter]
+    [EditorRequired]
+    public MergedProfile Inherited { get; set; } = null!;
+
+    /// <summary>The contents file, for its defaults.</summary>
+    [Parameter]
+    [EditorRequired]
+    public LootContentsDocument Root { get; set; } = null!;
+
+    /// <summary>Id of the datalist of drop tags.</summary>
+    [Parameter]
+    [EditorRequired]
+    public string DropTagList { get; set; } = string.Empty;
+
+    private static string EntriesText(IReadOnlyList<LootTypeEntry> entries) =>
+        entries.Count == 0 ? "none" : string.Join(", ", entries.Select(entry => $"{entry.DropTag} ×{Display.Number(entry.Weight)}"));
+
+    private void Edit(Action change)
+    {
+        change();
+        Session.Edited();
+    }
+
+    private void Toggle(bool on)
+    {
+        if (Profile is not { } profile)
+        {
+            return;
+        }
+
+        Edit(() =>
+        {
+            if (on)
+            {
+                profile.SetExtraStack();
+            }
+            else
+            {
+                profile.RemoveExtraStack();
+            }
+        });
+    }
+
+    private void AddEntry()
+    {
+        if (Profile?.ExtraStack is { } extra && _newEntry?.Trim() is { Length: > 0 } tag)
+        {
+            Edit(() => extra.AddEntry(tag, 1, 1));
+        }
+
+        _newEntry = null;
+    }
+
+    private void SetDropTag(LootTypeEntry entry, string? text)
+    {
+        string tag = text?.Trim() ?? string.Empty;
+        if (tag.Length > 0 && tag != entry.DropTag)
+        {
+            Edit(() => entry.DropTag = tag);
+        }
+    }
+
+    private void SetAmount(LootTypeEntry entry, double? min, double? max, bool minChanged)
+    {
+        if (RuleLootEditor.Range(min, max, minChanged) is { } range)
+        {
+            Edit(() =>
+            {
+                entry.Amount.Min = range.Min;
+                entry.Amount.Max = range.Max;
+            });
+        }
+    }
+}

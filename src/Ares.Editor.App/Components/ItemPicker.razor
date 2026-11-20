@@ -1,0 +1,156 @@
+@* A text input that suggests container items matching what is typed (technical or display name) and picks one. *@
+<div class="item-picker">
+    <input value="@_text" placeholder="@Placeholder" spellcheck="false" autocomplete="off" aria-label="@Label" title="@Title"
+           class="@(Known ? null : "unknown")" role="combobox" aria-expanded="@(_open ? "true" : "false")"
+           @oninput="OnInput" @onfocus="Open" @onblur="Close" @onkeydown="OnKeyDown" />
+    @if (_open)
+    {
+        <ul class="item-options" role="listbox" @onmousedown:preventDefault="true">
+            @for (int index = 0; index < _shown.Count; index++)
+            {
+                ContainerItem item = _shown[index];
+                int position = index;
+                <li role="option" aria-selected="@(position == _active ? "true" : "false")" class="@(position == _active ? "active" : null)"
+                    @onmousemove="() => _active = position" @onclick="() => PickAsync(item)">
+                    <span class="item-option-name">@(item.DisplayName ?? item.TechnicalName)</span>
+                    @if (item.DisplayName is not null)
+                    {
+                        <span class="item-option-id">@item.TechnicalName</span>
+                    }
+                </li>
+            }
+            @if (_matches.Count == 0)
+            {
+                <li class="item-options-note">No container item matches.</li>
+            }
+            else if (_matches.Count > _shown.Count)
+            {
+                <li class="item-options-note">@(_matches.Count - _shown.Count) more: keep typing</li>
+            }
+        </ul>
+    }
+</div>
+
+@code {
+    private const int MaxShown = 15;
+
+    private string _text = string.Empty;
+    private string? _shownValue;
+    private bool _open;
+    private int _active;
+    private IReadOnlyList<ContainerItem> _matches = [];
+    private List<ContainerItem> _shown = [];
+
+    /// <summary>The items to pick from.</summary>
+    [Parameter]
+    [EditorRequired]
+    public IReadOnlyList<ContainerItem> Items { get; set; } = [];
+
+    /// <summary>The picked item's technical name, or null for none (the input then starts empty).</summary>
+    [Parameter]
+    public string? Value { get; set; }
+
+    /// <summary>Called with the technical name of the item picked.</summary>
+    [Parameter]
+    public EventCallback<string> ValueChanged { get; set; }
+
+    /// <summary>Whether the input empties after a pick (to add items one after another).</summary>
+    [Parameter]
+    public bool ClearOnPick { get; set; }
+
+    /// <summary>The input's placeholder.</summary>
+    [Parameter]
+    public string? Placeholder { get; set; }
+
+    /// <summary>The input's accessible name.</summary>
+    [Parameter]
+    public string? Label { get; set; }
+
+    // A value that no container item has is shown as such: the server refuses it.
+    private bool Known => Value is null || Items.Any(item => item.TechnicalName == Value);
+
+    private string? Title => Value is null ? null
+        : Items.FirstOrDefault(item => item.TechnicalName == Value) is { } found ? found.DisplayName ?? found.TechnicalName
+        : "No item of the game data that a loot container can hold has this name; the server refuses it";
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        if (Value == _shownValue)
+        {
+            return;
+        }
+
+        _shownValue = Value;
+        _text = Value ?? string.Empty;
+    }
+
+    private void Open()
+    {
+        _open = true;
+        // A focused input that still shows the current value lists every item; typing narrows the list.
+        Filter(_text == (Value ?? string.Empty) ? null : _text);
+    }
+
+    private void Close()
+    {
+        _open = false;
+        _text = ClearOnPick ? _text : Value ?? string.Empty;
+    }
+
+    private void OnInput(ChangeEventArgs args)
+    {
+        _text = args.Value as string ?? string.Empty;
+        _open = true;
+        Filter(_text);
+    }
+
+    private void Filter(string? query)
+    {
+        _matches = ContainerItemSearch.Find(Items, query);
+        _shown = [.. _matches.Take(MaxShown)];
+        _active = 0;
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs args)
+    {
+        switch (args.Key)
+        {
+            case "ArrowDown":
+                if (!_open)
+                {
+                    Open();
+                }
+                else if (_shown.Count > 0)
+                {
+                    _active = (_active + 1) % _shown.Count;
+                }
+
+                break;
+            case "ArrowUp":
+                if (_open && _shown.Count > 0)
+                {
+                    _active = (_active + _shown.Count - 1) % _shown.Count;
+                }
+
+                break;
+            case "Enter":
+                if (_open && _active < _shown.Count)
+                {
+                    await PickAsync(_shown[_active]);
+                }
+
+                break;
+            case "Escape":
+                Close();
+                break;
+        }
+    }
+
+    private async Task PickAsync(ContainerItem item)
+    {
+        _open = false;
+        _text = ClearOnPick ? string.Empty : item.TechnicalName;
+        await ValueChanged.InvokeAsync(item.TechnicalName);
+    }
+}

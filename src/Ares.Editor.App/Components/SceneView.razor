@@ -1,0 +1,376 @@
+@* The 3D view of the map's containers and loose item sockets over its collision geometry and loot value areas
+   (wwwroot/js/scene.js, loose-sockets.js, map-geometry.js, loot-areas.js, fill-groups.js) and loot placement limiters, with the colour mode, the legend, the View box and the hover line. *@
+@implements IAsyncDisposable
+@inject IJSRuntime Js
+@inject GeometrySession Geometry
+@inject SceneOptions Options
+
+<div class="scene">
+    <canvas @ref="_canvas"></canvas>
+    @* The view owns this element's children: the area labels. *@
+    <div class="scene-area-labels" @ref="_labels"></div>
+
+    @if (Session.Map is { } map)
+    {
+        <div class="scene-legend card">
+            <select aria-label="Colour by" value="@Session.ColorMode" @onchange="OnColorModeChanged">
+                <option value="@ColorMode.SpawnChance">Colour: spawn chance</option>
+                <option value="@ColorMode.Source">Colour: source</option>
+                <option value="@ColorMode.Category">Colour: category</option>
+            </select>
+            <ul>
+                @foreach (LegendEntry entry in ContainerColoring.Legend(Session.ColorMode, map, Session.Matches, Session.Workspace!.GameData.TagTree))
+                {
+                    <li class="@(entry.Count == 0 ? "unused" : null)">
+                        <span class="swatch @(entry.Swatch.StartsWith('#') ? null : "scale")" style="background: @entry.Swatch"></span>
+                        <span>@entry.Label</span>
+                        <span class="legend-count">@entry.Count</span>
+                    </li>
+                }
+                @if (map.LooseItemSockets.Count > 0)
+                {
+                    int nature = LooseSocketDisplay.NatureCount(map);
+                    <li class="@(Options.LooseSocketsVisible ? null : "unused")" title="Loose item sockets not on nature (diamonds); see View">
+                        <span class="swatch" style="background: @LooseSocketDisplay.PropColor.Css"></span>
+                        <span>Loose item socket</span>
+                        <span class="legend-count">@(map.LooseItemSockets.Count - nature)</span>
+                    </li>
+                    <li class="@(Options.NatureSocketsVisible ? null : "unused")" title="Loose item sockets on trees, rocks and plants (diamonds); see View">
+                        <span class="swatch" style="background: @LooseSocketDisplay.NatureColor.Css"></span>
+                        <span>Loose, nature</span>
+                        <span class="legend-count">@nature</span>
+                    </li>
+                }
+            </ul>
+        </div>
+
+        <ViewOptions Session="Session" FlyToArea="FlyToAreaAsync" FlyToLimiter="FlyToLimiterAsync" />
+        <HighlightChip />
+        <SceneStatus @ref="_status" Session="Session" />
+    }
+</div>
+
+@code {
+    private ElementReference _canvas;
+    private ElementReference _labels;
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<SceneView>? _self;
+    private int _handle;
+    private SceneStatus? _status;
+    private LootRule? _outlinedRule;
+    private LootFillGroups? _outlinedGroups;
+
+    /// <summary>The editor session.</summary>
+    [Parameter]
+    [EditorRequired]
+    public EditorSession Session { get; set; } = null!;
+
+    /// <summary>Called by the view when the operator clicks a container (-1 for empty space).</summary>
+    /// <param name="index">The container's position in the map.</param>
+    /// <returns>A task.</returns>
+    [JSInvokable]
+    public Task OnContainerPicked(int index) => InvokeAsync(() => Session.SelectContainer(index));
+
+    /// <summary>Called by the view when the pointer moves onto a container (-1 when it leaves).</summary>
+    /// <param name="index">The container's position in the map.</param>
+    /// <returns>A task.</returns>
+    [JSInvokable]
+    public Task OnContainerHovered(int index) => InvokeAsync(() => _status?.Show(index));
+
+    /// <summary>Called by the view when the operator clicks a loose item socket.</summary>
+    /// <param name="index">The socket's position in the map.</param>
+    /// <returns>A task.</returns>
+    [JSInvokable]
+    public Task OnLooseSocketPicked(int index) => InvokeAsync(() => Session.SelectLooseSocket(index));
+
+    /// <summary>Called by the view when the pointer moves onto a loose item socket (-1 when it leaves).</summary>
+    /// <param name="index">The socket's position in the map.</param>
+    /// <returns>A task.</returns>
+    [JSInvokable]
+    public Task OnLooseSocketHovered(int index) => InvokeAsync(() => _status?.ShowLoose(index));
+
+    /// <summary>Called by the view while it loads the published map geometry.</summary>
+    /// <param name="loaded">Chunks loaded so far.</param>
+    /// <param name="failed">Chunks that failed to load.</param>
+    /// <returns>A task.</returns>
+    [JSInvokable]
+    public Task OnGeometryProgress(int loaded, int failed) => InvokeAsync(() => Geometry.ReportProgress(loaded, failed));
+
+    public async ValueTask DisposeAsync()
+    {
+        Session.Changed -= OnChanged;
+        Geometry.Changed -= OnGeometryChanged;
+        Options.Changed -= OnOptionsChanged;
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.InvokeVoidAsync("dispose", _handle);
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // The window is closing.
+            }
+        }
+
+        _self?.Dispose();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        _self = DotNetObjectReference.Create(this);
+        _module = await Js.InvokeAsync<IJSObjectReference>("import", "./js/scene.js");
+        _handle = await _module.InvokeAsync<int>("createScene", _canvas, _self, _labels);
+        Session.Changed += OnChanged;
+        Geometry.Changed += OnGeometryChanged;
+        Options.Changed += OnOptionsChanged;
+        await SyncOptionsAsync(SceneOptionChanges.Xray | SceneOptionChanges.Areas | SceneOptionChanges.AreaHighlight | SceneOptionChanges.LooseSockets
+            | SceneOptionChanges.Limiters | SceneOptionChanges.LimiterHighlight);
+        await SyncAsync(EditorChanges.Workspace);
+        await SyncGeometryAsync(GeometryChanges.Geometry);
+    }
+
+    private void OnColorModeChanged(ChangeEventArgs args)
+    {
+        if (Enum.TryParse(args.Value as string, out ColorMode mode))
+        {
+            Session.SetColorMode(mode);
+        }
+    }
+
+    private void OnChanged(EditorChanges changes) => _ = InvokeAsync(() => SyncAsync(changes));
+
+    private void OnGeometryChanged(GeometryChanges changes) => _ = InvokeAsync(() => SyncGeometryAsync(changes));
+
+    private void OnOptionsChanged(SceneOptionChanges changes) => _ = InvokeAsync(async () =>
+    {
+        await SyncOptionsAsync(changes);
+        if ((changes & SceneOptionChanges.LooseSockets) != SceneOptionChanges.None)
+        {
+            StateHasChanged();
+        }
+    });
+
+    private async Task FlyToAreaAsync(int index)
+    {
+        if (_module is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _module.InvokeVoidAsync("frameArea", _handle, index);
+        }
+        catch (JSDisconnectedException)
+        {
+            // The window is closing.
+        }
+    }
+
+    private async Task FlyToLimiterAsync(int index)
+    {
+        if (_module is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _module.InvokeVoidAsync("frameLimiter", _handle, index);
+        }
+        catch (JSDisconnectedException)
+        {
+            // The window is closing.
+        }
+    }
+
+    // Sends the view the X-ray mode, the loot value area switches, the loose item socket switches and the limiter switches.
+    private async Task SyncOptionsAsync(SceneOptionChanges changes)
+    {
+        if (_module is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if ((changes & SceneOptionChanges.Xray) != SceneOptionChanges.None)
+            {
+                await _module.InvokeVoidAsync("setXrayMode", _handle, (int)Options.XrayMode, Options.XrayDistance);
+            }
+
+            if ((changes & SceneOptionChanges.Areas) != SceneOptionChanges.None)
+            {
+                await _module.InvokeVoidAsync("setAreasVisible", _handle, Options.AreasVisible);
+            }
+
+            if ((changes & SceneOptionChanges.AreaHighlight) != SceneOptionChanges.None)
+            {
+                await _module.InvokeVoidAsync("setAreaHighlight", _handle, (int)Options.HighlightedArea);
+            }
+
+            if ((changes & SceneOptionChanges.LooseSockets) != SceneOptionChanges.None)
+            {
+                await _module.InvokeVoidAsync("setLooseVisible", _handle, Options.LooseSocketsVisible, Options.NatureSocketsVisible);
+            }
+
+            if ((changes & SceneOptionChanges.Limiters) != SceneOptionChanges.None)
+            {
+                await _module.InvokeVoidAsync("setLimitersVisible", _handle, Options.LimitersVisible);
+            }
+
+            if ((changes & SceneOptionChanges.LimiterHighlight) != SceneOptionChanges.None)
+            {
+                await _module.InvokeVoidAsync("setLimiterHighlight", _handle, Options.HighlightedLimiter);
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+            // The window is closing.
+        }
+    }
+
+    // Sends the view newly published geometry (which carries the shown layers), or the layer switches.
+    private async Task SyncGeometryAsync(GeometryChanges changes)
+    {
+        if (_module is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if ((changes & GeometryChanges.Geometry) != GeometryChanges.None)
+            {
+                await _module.InvokeVoidAsync("setMap", _handle, GeometryDescriptor.Of(Geometry));
+            }
+            else if ((changes & GeometryChanges.Visibility) != GeometryChanges.None && Geometry.Geometry is { } geometry)
+            {
+                for (int layer = 0; layer < geometry.DataLayers.Count; layer++)
+                {
+                    await _module.InvokeVoidAsync("setLayerVisible", _handle, layer, Geometry.IsLayerVisible(layer));
+                }
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+            // The window is closing.
+        }
+    }
+
+    // Sends the view what the changes affect: all data (containers, loose item sockets, areas and limiters) for a new workspace or
+    // map, else colours, area labels (the multipliers), highlight, selection and focus as needed.
+    private async Task SyncAsync(EditorChanges changes)
+    {
+        if (_module is null)
+        {
+            return;
+        }
+
+        try
+        {
+            bool all = (changes & (EditorChanges.Workspace | EditorChanges.Map)) != EditorChanges.None;
+            if (all)
+            {
+                _status?.Show(-1);
+                _status?.ShowLoose(-1);
+                await _module.InvokeVoidAsync("setContainers", _handle, Positions(), Colors());
+                if (Session.Map is { } shown)
+                {
+                    await _module.InvokeVoidAsync("setLooseSockets", _handle, LooseSocketDisplay.Positions(shown), LooseSocketDisplay.Colors(shown), LooseSocketDisplay.Nature(shown));
+                }
+                else
+                {
+                    await _module.InvokeVoidAsync("setLooseSockets", _handle, null, null, null);
+                }
+
+                await _module.InvokeVoidAsync("setAreas", _handle, Session is { Map: { } map, Workspace: { } workspace } ? AreaDisplay.Descriptors(map, workspace.Spawn) : []);
+                await _module.InvokeVoidAsync("setLimiters", _handle, Session.Map is { } limited ? LimiterDisplay.Descriptors(limited) : []);
+                Options.HighlightLimiter(-1);
+            }
+            else if ((changes & (EditorChanges.Content | EditorChanges.Colors)) != EditorChanges.None)
+            {
+                await _module.InvokeVoidAsync("setColors", _handle, Colors());
+                if ((changes & EditorChanges.Content) != EditorChanges.None && Session is { Map: { } map, Workspace: { } workspace })
+                {
+                    await _module.InvokeVoidAsync("setAreaLabels", _handle, AreaDisplay.Labels(map, workspace.Spawn));
+                }
+            }
+
+            if (all || (changes & (EditorChanges.Content | EditorChanges.Selection)) != EditorChanges.None)
+            {
+                // Highlighting is on while the selection covers anything on the map; then the rest is dimmed.
+                int[] highlighted = Session.HighlightedIndices();
+                int[] looseHighlighted = Session.HighlightedLooseIndices();
+                bool highlighting = highlighted.Length > 0 || looseHighlighted.Length > 0;
+                await _module.InvokeVoidAsync("setHighlighted", _handle, highlighting ? highlighted : null);
+                await _module.InvokeVoidAsync("setLooseHighlighted", _handle, highlighting ? looseHighlighted : null);
+                await _module.InvokeVoidAsync("setSelected", _handle, Session.SelectedIndex);
+                await _module.InvokeVoidAsync("setLooseSelected", _handle, Session.SelectedLooseIndex);
+                int[] group = Session.FillGroups.GroupOf(Session.SelectedIndex) is { } selected ? [.. selected.Members] : [];
+                await _module.InvokeVoidAsync("setFillGroup", _handle, group, Session.SelectedIndex);
+                await SyncRuleGroupsAsync(all);
+            }
+
+            if ((changes & EditorChanges.Focus) != EditorChanges.None && Session.SelectedIndex >= 0)
+            {
+                await _module.InvokeVoidAsync("focus", _handle, Session.SelectedIndex);
+            }
+            else if ((changes & EditorChanges.Focus) != EditorChanges.None && Session.SelectedLooseIndex >= 0)
+            {
+                await _module.InvokeVoidAsync("focusLoose", _handle, Session.SelectedLooseIndex);
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+            // The window is closing.
+        }
+    }
+
+    // Sends the outlines of the highlighted rule's fill groups, when the rule or the groups (any edit) changed or the
+    // containers were replaced.
+    private async Task SyncRuleGroupsAsync(bool all)
+    {
+        LootRule? rule = Session is { HighlightsRule: true, SelectedRule: { GroupFill.IsSet: true } selected } ? selected : null;
+        if (_module is null || (!all && ReferenceEquals(rule, _outlinedRule) && ReferenceEquals(Session.FillGroups, _outlinedGroups)))
+        {
+            return;
+        }
+
+        _outlinedRule = rule;
+        _outlinedGroups = Session.FillGroups;
+        int[][] groups = rule is null ? [] : [.. Session.FillGroups.Of(rule).Select(group => group.Members.ToArray())];
+        await _module.InvokeVoidAsync("setFillGroups", _handle, groups);
+    }
+
+    private double[] Positions()
+    {
+        if (Session.Map is not { } map)
+        {
+            return [];
+        }
+
+        double[] positions = new double[map.Containers.Count * 3];
+        for (int index = 0; index < map.Containers.Count; index++)
+        {
+            WorldVector location = map.Containers[index].Location;
+            positions[index * 3] = location.X;
+            positions[(index * 3) + 1] = location.Y;
+            positions[(index * 3) + 2] = location.Z;
+        }
+
+        return positions;
+    }
+
+    private double[] Colors() =>
+        Session is { Map: { } map, Workspace: { } workspace }
+            ? ContainerColoring.Colors(Session.ColorMode, map, Session.Matches, workspace.GameData.TagTree)
+            : [];
+}

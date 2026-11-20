@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Ares.Editor.Core</RootNamespace>
+    <Description>ARES-Editor's data layer: an ARES-Server install's game data (read-only) and its loot content files.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Ares.Editor.Core.Tests" />
+  </ItemGroup>
+
+</Project>

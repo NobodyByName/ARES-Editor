@@ -1,0 +1,68 @@
+@* The line under the 3D view: the hovered container or loose item socket (id, tag, chance), else how to use the view. *@
+
+<div class="scene-status">
+    @if (Hovered() is { } hovered)
+    {
+        <span>@hovered</span>
+    }
+    else
+    {
+        <span class="muted">@Session.Map?.Name · @Session.Map?.Containers.Count containers · @Session.Map?.LooseItemSockets.Count loose item sockets · drag to orbit, right-drag to pan, scroll to zoom, click to select</span>
+    }
+</div>
+
+@code {
+    private int _hovered = -1;
+    private int _hoveredLoose = -1;
+
+    /// <summary>The editor session.</summary>
+    [Parameter]
+    [EditorRequired]
+    public EditorSession Session { get; set; } = null!;
+
+    /// <summary>Shows a hovered container, or the usage line for -1.</summary>
+    /// <param name="index">The container's position in the map, or -1.</param>
+    public void Show(int index)
+    {
+        if (index == _hovered)
+        {
+            return;
+        }
+
+        _hovered = index;
+        StateHasChanged();
+    }
+
+    /// <summary>Shows a hovered loose item socket, or the usage line for -1 (when no container is hovered).</summary>
+    /// <param name="index">The socket's position in the map, or -1.</param>
+    public void ShowLoose(int index)
+    {
+        if (index == _hoveredLoose)
+        {
+            return;
+        }
+
+        _hoveredLoose = index;
+        StateHasChanged();
+    }
+
+    private string? Hovered() =>
+        Session.Map is { } map && _hovered >= 0 && _hovered < map.Containers.Count && _hovered < Session.Matches.Count
+            ? Describe(map.Containers[_hovered], Session.Matches[_hovered])
+            : Session is { Map: { } looseMap, Workspace: { } workspace } && _hoveredLoose >= 0 && _hoveredLoose < looseMap.LooseItemSockets.Count
+                ? LooseSocketDisplay.Describe(looseMap.LooseItemSockets[_hoveredLoose], workspace.Match(looseMap.LooseItemSockets[_hoveredLoose]))
+                : null;
+
+    private static string Describe(LootContainer container, ContainerMatch match)
+    {
+        string tag = container.Tags.Count > 0 ? string.Join(", ", container.Tags) : "no tag";
+        string chance = match.Decision switch
+        {
+            SpawnDecision.Never => "never spawns",
+            SpawnDecision.GroupFill => "group fill",
+            SpawnDecision.SpawnerGroups => $"chance {Display.Percent(match.Chance ?? 0)} ({SpawnerChances.DefaultRound} raid)",
+            _ => $"chance {Display.Percent(match.Chance ?? 0)}",
+        };
+        return $"{container.Id} · {tag} · {chance}";
+    }
+}

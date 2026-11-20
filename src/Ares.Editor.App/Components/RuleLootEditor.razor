@@ -1,0 +1,132 @@
+@* A rule's contents: the items drawn by weight with their stack sizes, and how many stacks. *@
+
+<span class="field-label">Contents</span>
+@if (Rule.Loot is { } loot)
+{
+    <div class="setting-row">
+        <label>Stacks</label>
+        <span class="range">
+            <NumberInput Value="loot.Stacks?.Min" Optional="true" Integer="true" Min="0" Placeholder="usual" Label="Fewest stacks"
+                         ValueChanged="value => SetStacks(loot, value, loot.Stacks?.Max, minChanged: true)" />
+            <span>to</span>
+            <NumberInput Value="loot.Stacks?.Max" Optional="true" Integer="true" Min="0" Placeholder="usual" Label="Most stacks"
+                         ValueChanged="value => SetStacks(loot, loot.Stacks?.Min, value, minChanged: false)" />
+        </span>
+    </div>
+    @if (loot.Items.Count == 0)
+    {
+        <p class="warning">Add at least one item; the server refuses contents without items.</p>
+    }
+    else
+    {
+        <table class="grid-table loot-items">
+            <thead><tr><th>Item</th><th>Weight</th><th>Amount</th><th></th></tr></thead>
+            <tbody>
+                @foreach (LootItem item in loot.Items)
+                {
+                    <tr @key="item">
+                        <td>
+                            <ItemPicker Items="Items" Value="@item.Item" Label="Item" ValueChanged="name => SetItem(item, name)" />
+                            @if (Items.FirstOrDefault(known => known.TechnicalName == item.Item)?.DisplayName is { } displayName)
+                            {
+                                <span class="item-display-name">@displayName</span>
+                            }
+                        </td>
+                        <td><NumberInput Value="item.Weight" Min="0" Label="Weight" ValueChanged="value => Edit(() => item.Weight = value ?? 1)" /></td>
+                        <td class="range">
+                            <NumberInput Value="item.Amount?.Min" Optional="true" Integer="true" Min="1" Placeholder="1" Label="Smallest stack"
+                                         ValueChanged="value => SetAmount(item, value, item.Amount?.Max, minChanged: true)" />
+                            <span>–</span>
+                            <NumberInput Value="item.Amount?.Max" Optional="true" Integer="true" Min="1" Placeholder="1" Label="Largest stack"
+                                         ValueChanged="value => SetAmount(item, item.Amount?.Min, value, minChanged: false)" />
+                        </td>
+                        <td><button class="quiet remove" aria-label="@($"Remove {item.Item}")" @onclick="() => Edit(() => loot.Items.Remove(item))">✕</button></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+    <div class="add-line">
+        <ItemPicker Items="Items" ClearOnPick="true" Placeholder="Add an item: type part of its name…" Label="Item to add"
+                    ValueChanged="name => Edit(() => loot.AddItem(name))" />
+    </div>
+    <button class="quiet remove add-row" @onclick="() => Edit(Rule.RemoveLoot)">Remove contents (use the default roll)</button>
+}
+else
+{
+    <p class="hint">Covered containers get the default roll.</p>
+    <button class="quiet add-row" @onclick="() => Edit(() => Rule.SetLoot())">+ Give contents</button>
+}
+
+@code {
+    /// <summary>The editor session.</summary>
+    [Parameter]
+    [EditorRequired]
+    public EditorSession Session { get; set; } = null!;
+
+    /// <summary>The rule whose contents are edited.</summary>
+    [Parameter]
+    [EditorRequired]
+    public LootRule Rule { get; set; } = null!;
+
+    // The items the server lets a rule put in a container.
+    private IReadOnlyList<ContainerItem> Items => Session.Workspace?.GameData.ContainerItems ?? [];
+
+    private void Edit(Action change)
+    {
+        change();
+        Session.Edited();
+    }
+
+    private void SetItem(LootItem item, string? text)
+    {
+        string name = text?.Trim() ?? string.Empty;
+        if (name.Length > 0 && name != item.Item)
+        {
+            Edit(() => item.Item = name);
+        }
+    }
+
+    private void SetStacks(LootList loot, double? min, double? max, bool minChanged)
+    {
+        if (Range(min, max, minChanged) is { } range)
+        {
+            Edit(() => loot.SetStacks(range.Min, range.Max));
+        }
+        else
+        {
+            Edit(loot.RemoveStacks);
+        }
+    }
+
+    private void SetAmount(LootItem item, double? min, double? max, bool minChanged)
+    {
+        if (Range(min, max, minChanged) is { } range)
+        {
+            Edit(() => item.SetAmount(range.Min, range.Max));
+        }
+        else
+        {
+            Edit(item.RemoveAmount);
+        }
+    }
+
+    // The range from the two inputs: none when both are empty, one end alone gives both, and the end just changed
+    // pushes the other one when they cross.
+    internal static (int Min, int Max)? Range(double? min, double? max, bool minChanged)
+    {
+        if (min is null && max is null)
+        {
+            return null;
+        }
+
+        int low = (int)(min ?? max!.Value);
+        int high = (int)(max ?? min!.Value);
+        if (low <= high)
+        {
+            return (low, high);
+        }
+
+        return minChanged ? (low, low) : (high, high);
+    }
+}

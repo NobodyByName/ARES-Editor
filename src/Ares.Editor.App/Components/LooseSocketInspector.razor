@@ -1,0 +1,122 @@
+@* The selected loose item socket: what it is, and what the current loot files decide for it and why. *@
+@inject IJSRuntime Js
+
+@if (Session is { SelectedLooseSocket: { } socket, Workspace: { } workspace })
+{
+    LooseItemMatch match = workspace.Match(socket);
+    <section class="inspector-section">
+        <header class="section-header">
+            <h2>Loose item socket</h2>
+            <span class="row">
+                <button class="quiet" @onclick="Session.RequestFocus" title="Fly the view to the socket">Focus</button>
+                <button class="quiet" aria-label="Deselect" @onclick="() => Session.SelectLooseSocket(-1)">✕</button>
+            </span>
+        </header>
+        <div class="id-row">
+            <code class="container-id">@socket.Id</code>
+            <button class="quiet" title="Copy the id" @onclick="() => CopyAsync(socket.Id)">@(_copied == socket.Id ? "Copied" : "Copy")</button>
+        </div>
+        <dl class="facts">
+            <dt>Tag</dt>
+            <dd><button class="chip link" title="Highlight this tag's loose item sockets" @onclick="() => Session.SelectTag(socket.Tag)">@socket.Tag</button></dd>
+            <dt>Options</dt>
+            <dd>@LooseSocketDisplay.Options(socket.Options)</dd>
+            <dt>Area</dt>
+            <dd>@socket.Area</dd>
+            <dt>Position</dt>
+            <dd>@Display.Location(socket.Location)</dd>
+            <dt>Data layer</dt>
+            <dd>
+                @if (socket.DataLayer is null)
+                {
+                    <span class="muted">None: always present</span>
+                }
+                else
+                {
+                    <span title="@socket.DataLayer">@DataLayerNames.Label(socket.DataLayer)</span>
+                }
+            </dd>
+        </dl>
+
+        <h3>Item</h3>
+        <div class="decision">
+            <span class="swatch" style="background: @LooseSocketDisplay.ColorOf(socket).Css"></span>
+            <strong>@(match.SpawnRule is null ? "Default" : "Rule") chance @Display.Percent(match.Chance)</strong>
+        </div>
+        <p class="derivation">@Derivation(socket, match)</p>
+        <dl class="facts">
+            <dt>Stack</dt>
+            <dd>
+                @if (match.LootRule is { } lootRule)
+                {
+                    <button class="chip link" @onclick="() => Session.SelectRule(lootRule)">@Name(lootRule)</button>
+                }
+                else
+                {
+                    <span class="muted">Default roll</span>
+                }
+            </dd>
+        </dl>
+        <p class="hint">
+            One stack per socket. A rule's loot list gives it only when the list has an item that can lie in the world, and a
+            socket whose tag no item can hold stays empty. Group fills and reveal delays do not apply to loose item sockets.
+        </p>
+        @if (Session.Map is { } map)
+        {
+            <LimiterCaps Map="map" Location="socket.Location" Tag="@socket.Tag" Enabled="workspace.Spawn.Limiters" RuleDecides="@(match.SpawnRule is not null)" />
+        }
+        <ProfileChain Session="Session" Tags="@([socket.Tag])" />
+        <ContentOddsPanel Session="Session" Loose="socket" LooseMatch="match" />
+
+        <h3>Covering rules <span class="count">@match.CoveringRules.Count</span></h3>
+        @if (match.CoveringRules.Count == 0)
+        {
+            <p class="hint">No rule covers this socket.</p>
+        }
+        else
+        {
+            <ol class="covering">
+                @foreach (LootRule rule in match.CoveringRules)
+                {
+                    <li>
+                        <button class="chip link @(ReferenceEquals(rule, match.SpawnRule) || ReferenceEquals(rule, match.LootRule) ? "decides" : null)"
+                                @onclick="() => Session.SelectRule(rule)">@Name(rule)</button>
+                    </li>
+                }
+            </ol>
+            <p class="hint">Highlighted rules decide a setting.</p>
+        }
+    </section>
+}
+
+@code {
+    private string? _copied;
+
+    /// <summary>The editor session.</summary>
+    [Parameter]
+    [EditorRequired]
+    public EditorSession Session { get; set; } = null!;
+
+    private string Derivation(LooseItemSocket socket, LooseItemMatch match)
+    {
+        if (match.SpawnRule is { } rule)
+        {
+            return $"Rule {Name(rule)} sets spawnChance {Display.Number(match.Chance)}. Limiters do not apply.";
+        }
+
+        string tagPart = match.ChanceTag is null
+            ? $"No looseChances entry applies to {socket.Tag}, so the tag chance is 0"
+            : $"Loose chance {Display.Number(match.TagChance ?? 0)} from {match.ChanceTag}";
+        double product = (match.TagChance ?? 0) * match.AreaMultiplier;
+        string cap = product > 1 ? " (capped at 1)" : string.Empty;
+        string limits = Session.Workspace!.Spawn.Limiters ? " Limiters can still stop it." : string.Empty;
+        return $"{tagPart} × {socket.Area} area multiplier {Display.Number(match.AreaMultiplier)} = {Display.Number(match.Chance)}{cap}.{limits}";
+    }
+
+    private string Name(LootRule rule) => Display.RuleName(rule, Session.Workspace!.Rules.Rules);
+
+    private async Task CopyAsync(string text)
+    {
+        _copied = await Clipboard.CopyAsync(Js, text) ? text : null;
+    }
+}

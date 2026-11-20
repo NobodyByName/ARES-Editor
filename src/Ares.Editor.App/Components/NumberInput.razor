@@ -1,0 +1,110 @@
+@* A number input that applies its value on change, refusing text that is not a number in range. *@
+<input type="number" class="number @(_error is null ? null : "invalid") @Class" step="@(Integer ? "1" : "any")" value="@_text"
+       placeholder="@Placeholder" title="@(_error ?? Title)" aria-label="@Label" aria-invalid="@(_error is not null ? "true" : null)"
+       @onchange="OnChangeAsync" @onclick:stopPropagation="true" />
+
+@code {
+    private string _text = string.Empty;
+    private string? _shownText;
+    private string? _error;
+
+    /// <summary>The current value, or null for none.</summary>
+    [Parameter]
+    public double? Value { get; set; }
+
+    /// <summary>Called with a new valid value (null when <see cref="Optional"/> and the input was cleared).</summary>
+    [Parameter]
+    public EventCallback<double?> ValueChanged { get; set; }
+
+    /// <summary>Whether clearing the input is allowed and means no value.</summary>
+    [Parameter]
+    public bool Optional { get; set; }
+
+    /// <summary>Whether only whole numbers are allowed.</summary>
+    [Parameter]
+    public bool Integer { get; set; }
+
+    /// <summary>The lowest value allowed, or null.</summary>
+    [Parameter]
+    public double? Min { get; set; }
+
+    /// <summary>The highest value allowed, or null.</summary>
+    [Parameter]
+    public double? Max { get; set; }
+
+    /// <summary>Text shown when the input is empty.</summary>
+    [Parameter]
+    public string? Placeholder { get; set; }
+
+    /// <summary>Tooltip.</summary>
+    [Parameter]
+    public string? Title { get; set; }
+
+    /// <summary>Accessible name.</summary>
+    [Parameter]
+    public string? Label { get; set; }
+
+    /// <summary>Extra CSS classes.</summary>
+    [Parameter]
+    public string? Class { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        // Only a value changed from outside replaces what the operator typed.
+        string text = Display.Number(Value);
+        if (text == _shownText)
+        {
+            return;
+        }
+
+        _shownText = text;
+        _text = text;
+        _error = null;
+    }
+
+    private async Task OnChangeAsync(ChangeEventArgs args)
+    {
+        string text = (args.Value as string ?? string.Empty).Trim();
+        _text = text;
+        _error = Validate(text, out double? value);
+        if (_error is not null)
+        {
+            return;
+        }
+
+        _shownText = Display.Number(value);
+        await ValueChanged.InvokeAsync(value);
+    }
+
+    private string? Validate(string text, out double? value)
+    {
+        value = null;
+        if (text.Length == 0)
+        {
+            return Optional ? null : "A value is required.";
+        }
+
+        if (!Display.TryParse(text, out double number))
+        {
+            return "Not a number.";
+        }
+
+        if (Integer && !double.IsInteger(number))
+        {
+            return "Must be a whole number.";
+        }
+
+        if (number < Min)
+        {
+            return $"Must be at least {Display.Number(Min)}.";
+        }
+
+        if (number > Max)
+        {
+            return $"Must be at most {Display.Number(Max)}.";
+        }
+
+        value = number;
+        return null;
+    }
+}

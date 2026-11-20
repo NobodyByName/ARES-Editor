@@ -1,0 +1,82 @@
+@* The spawn settings of loot-spawn.json besides the tag chances: area multipliers, group caps and limiters. Pointing at or
+   focusing an area multiplier highlights the areas of that loot value in the 3D view. *@
+@inject SceneOptions Options
+
+<details class="side-section" open>
+    <summary>Spawn settings</summary>
+    @foreach (string problem in Spawn.Problems)
+    {
+        <p class="warning">The server refuses this: @problem.</p>
+    }
+    <div class="settings-grid">
+        <span class="field-label">Area multipliers</span>
+        @foreach (LootArea area in Enum.GetValues<LootArea>())
+        {
+            string key = area.ToString();
+            double? own = Spawn.AreaMultipliers.Get(key);
+            <div class="setting-row" @onmouseenter="() => Options.HighlightArea(area)" @onmouseleave="() => Options.HighlightArea(LootArea.Unknown)"
+                 @onfocusin="() => Options.HighlightArea(area)" @onfocusout="() => Options.HighlightArea(LootArea.Unknown)">
+                <span>@key</span>
+                <span class="count" title="Containers of this map in such areas">@AreaCount(area)</span>
+                <span class="setting-value">
+                    @if (own is not null)
+                    {
+                        <NumberInput Value="own" Optional="true" Min="0" Label="@($"{key} area multiplier")" Title="Factor on the tag chance; clear to use Unknown's"
+                                     ValueChanged="value => SetMultiplier(key, value)" />
+                        <button class="quiet remove" title="Remove the entry" @onclick="() => SetMultiplier(key, null)">✕</button>
+                    }
+                    else
+                    {
+                        <span class="inherited" title="No entry: uses Unknown's, else 1">@Display.Number(LootMatching.MultiplierOf(Spawn, area))</span>
+                        <button class="quiet add" title="Give this area its own multiplier" @onclick="() => SetMultiplier(key, LootMatching.MultiplierOf(Spawn, area))">+</button>
+                    }
+                </span>
+            </div>
+        }
+        <label class="check">
+            <input type="checkbox" checked="@Spawn.GroupCaps" @onchange="args => SetGroupCaps(args.Value is true)" />
+            <span>Group caps <span class="hint">(a container type's most per group applies to sockets)</span></span>
+        </label>
+        <label class="check">
+            <input type="checkbox" checked="@Spawn.Limiters" @onchange="args => SetLimiters(args.Value is true)" />
+            <span>Limiters <span class="hint">(the map's placement limiters cap their sockets)</span></span>
+        </label>
+    </div>
+</details>
+
+@code {
+    /// <summary>The editor session.</summary>
+    [Parameter]
+    [EditorRequired]
+    public EditorSession Session { get; set; } = null!;
+
+    private LootSpawnDocument Spawn => Session.Workspace!.Spawn;
+
+    private int AreaCount(LootArea area) => Session.Map?.Containers.Count(container => container.Area == area) ?? 0;
+
+    private void SetMultiplier(string key, double? value)
+    {
+        if (value is { } set)
+        {
+            Spawn.AreaMultipliers.Set(key, set);
+        }
+        else
+        {
+            Spawn.AreaMultipliers.Remove(key);
+        }
+
+        Session.Edited();
+    }
+
+    private void SetGroupCaps(bool value)
+    {
+        Spawn.GroupCaps = value;
+        Session.Edited();
+    }
+
+    private void SetLimiters(bool value)
+    {
+        Spawn.Limiters = value;
+        Session.Edited();
+    }
+}

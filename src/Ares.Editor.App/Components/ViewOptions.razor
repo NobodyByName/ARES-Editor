@@ -1,0 +1,232 @@
+@* The "View" box over the 3D view: the map geometry's state, X-ray containers, the data layers, the loose item sockets,
+   the loot value areas and the loot placement limiters. *@
+@implements IDisposable
+@inject GeometrySession Geometry
+@inject SceneOptions Options
+
+<details class="scene-options card" open>
+    <summary>View</summary>
+    <div class="scene-options-body">
+        @if (Geometry.StatusLine() is { } status)
+        {
+            <p class="hint">@status</p>
+        }
+        @if (Geometry.Problem is { } problem)
+        {
+            <div class="warning">@problem</div>
+        }
+        @if (Geometry.Geometry?.BuildWarning is { } warning)
+        {
+            <div class="warning">@warning</div>
+        }
+
+        <div class="options-group">
+            <span class="field-label">X-ray containers</span>
+            <select aria-label="X-ray containers" value="@Options.XrayMode" @onchange="OnXrayModeChanged">
+                <option value="@XrayMode.Off">Off: walls hide them</option>
+                <option value="@XrayMode.Near">Within a distance of the camera</option>
+                <option value="@XrayMode.All">All, through walls</option>
+            </select>
+            @if (Options.XrayMode == XrayMode.Near)
+            {
+                <div class="xray-distance" title="Containers closer to the camera than this show through walls and floors">
+                    <input type="range" min="0" max="@SceneOptions.XraySliderSteps" step="1" value="@Options.XraySliderPosition"
+                           aria-label="X-ray distance" @oninput="OnXrayDistanceInput" />
+                    <span class="xray-distance-value">@Display.Number(Options.XrayDistance) m</span>
+                </div>
+            }
+        </div>
+
+        @if (Geometry.Geometry is { DataLayers.Count: > 0 } geometry)
+        {
+            <details class="options-sub">
+                <summary>Data layers <span class="count" title="Shown data layers">@Geometry.VisibleLayers().Length / @geometry.DataLayers.Count</span></summary>
+                <p class="hint">Map conditions; the base map is always shown.</p>
+                <div class="options-scroll">
+                    @* Most placed bodies first. *@
+                    @foreach (int layer in Enumerable.Range(0, geometry.DataLayers.Count)
+                                  .OrderByDescending(index => geometry.DataLayers[index].PlacementCount)
+                                  .ThenBy(index => DataLayerNames.Label(geometry.DataLayers[index].Name), StringComparer.Ordinal))
+                    {
+                        GeometryLayer entry = geometry.DataLayers[layer];
+                        <label class="check geometry-layer" title="@entry.Name">
+                            <input type="checkbox" checked="@Geometry.IsLayerVisible(layer)" @onchange="args => Geometry.SetLayerVisible(layer, args.Value is true)" />
+                            <span class="geometry-layer-name">@DataLayerNames.Label(entry.Name)</span>
+                            <span class="count" title="Placed bodies in this layer">@entry.PlacementCount</span>
+                        </label>
+                    }
+                </div>
+            </details>
+        }
+
+        @if (Session.Map is { LooseItemSockets.Count: > 0 } looseMap)
+        {
+            int nature = LooseSocketDisplay.NatureCount(looseMap);
+            <details class="options-sub" open>
+                <summary>Loose item sockets</summary>
+                <p class="hint">Spots for one item lying in the world, drawn as small diamonds.</p>
+                <label class="check geometry-layer" title="Loose item sockets on furniture, vehicles and other props">
+                    <input type="checkbox" checked="@Options.LooseSocketsVisible" @onchange="args => Options.SetLooseSocketsVisible(args.Value is true)" />
+                    <span class="swatch" style="background: @LooseSocketDisplay.PropColor.Css"></span>
+                    <span class="geometry-layer-name">Props</span>
+                    <span class="count">@(looseMap.LooseItemSockets.Count - nature)</span>
+                </label>
+                <label class="check geometry-layer" title="@($"Loose item sockets on trees, rocks and plants ({LooseItemSocket.NatureTag} and below)")">
+                    <input type="checkbox" checked="@Options.NatureSocketsVisible" @onchange="args => Options.SetNatureSocketsVisible(args.Value is true)" />
+                    <span class="swatch" style="background: @LooseSocketDisplay.NatureColor.Css"></span>
+                    <span class="geometry-layer-name">Nature</span>
+                    <span class="count">@nature</span>
+                </label>
+            </details>
+        }
+
+        @if (Session is { Map: { Areas.Count: > 0 } map, Workspace: { } workspace })
+        {
+            <details class="options-sub" open>
+                <summary>Loot value areas</summary>
+                <label class="check">
+                    <input type="checkbox" checked="@Options.AreasVisible" @onchange="args => Options.SetAreasVisible(args.Value is true)" />
+                    <span>Show areas</span>
+                </label>
+                <ul class="area-list">
+                    @foreach (int index in AreaDisplay.ListOrder(map))
+                    {
+                        LootValueArea area = map.Areas[index];
+                        <li>
+                            <button class="area-row" title="@area.Actor @area.Name" @onclick="() => FlyToArea.InvokeAsync(index)">
+                                <span class="swatch" style="background: @AreaDisplay.Color(area.Value)"></span>
+                                <span class="area-name">@AreaDisplay.Name(area)</span>
+                                <span class="area-value">@area.Value @AreaDisplay.Multiplier(workspace.Spawn, area.Value)</span>
+                            </button>
+                        </li>
+                    }
+                    <li class="area-row unknown" title="Containers outside every area">
+                        <span class="swatch" style="background: @AreaDisplay.Color(LootArea.Unknown)"></span>
+                        <span class="area-name">Unknown (everywhere else)</span>
+                        <span class="area-value">@AreaDisplay.Multiplier(workspace.Spawn, LootArea.Unknown)</span>
+                    </li>
+                </ul>
+            </details>
+        }
+
+        @if (Session is { Map: { Limiters.Count: > 0 } limited, Workspace: { } limitedWorkspace })
+        {
+            <details class="options-sub" open="@(Options.HighlightedLimiter >= 0)">
+                <summary>Loot limiters <span class="count">@limited.Limiters.Count</span></summary>
+                <p class="hint">
+                    Zones that cap how many sockets of a tag get loot inside them@(limitedWorkspace.Spawn.Limiters ? "." : "; off in the spawn settings.")
+                </p>
+                <label class="check">
+                    <input type="checkbox" checked="@Options.LimitersVisible" @onchange="args => Options.SetLimitersVisible(args.Value is true)" />
+                    <span>Show limiters</span>
+                </label>
+                <ul class="area-list">
+                    @foreach (int index in LimiterDisplay.ListOrder(limited))
+                    {
+                        LootLimiter limiter = limited.Limiters[index];
+                        bool open = index == Options.HighlightedLimiter;
+                        <li>
+                            <button class="area-row @(open ? "open" : null)" title="@limiter.Id" @onclick="() => PickLimiterAsync(index)">
+                                <span class="swatch" style="background: @LimiterDisplay.Color"></span>
+                                <span class="area-name">@LimiterDisplay.Name(limited, limiter)</span>
+                                <span class="area-value">@Display.Count(limiter.Limits.Count(limit => !limit.Unlimited), "cap")</span>
+                            </button>
+                            @if (open)
+                            {
+                                <div class="limiter-details">
+                                    <span class="muted">@LimiterDisplay.Shape(limiter)@(limiter.DataLayer is { } layer ? $"; only with {DataLayerNames.Label(layer)}" : string.Empty)</span>
+                                    <ul class="limit-list">
+                                        @foreach (LootLimit limit in limiter.Limits)
+                                        {
+                                            <li class="@(limit.Unlimited ? "unlimited" : null)" title="@limit.Tag">
+                                                <span class="limit-tag">@LimiterDisplay.ShortTag(limit.Tag)</span>
+                                                <span class="limit-cap">@LimiterDisplay.Cap(limit) · @Display.Count(LimiterDisplay.Sockets(limited, limiter, limit), "socket")</span>
+                                            </li>
+                                        }
+                                    </ul>
+                                </div>
+                            }
+                        </li>
+                    }
+                </ul>
+            </details>
+        }
+    </div>
+</details>
+
+@code {
+    /// <summary>The editor session.</summary>
+    [Parameter]
+    [EditorRequired]
+    public EditorSession Session { get; set; } = null!;
+
+    /// <summary>Called with an area's position in <see cref="MapLoot.Areas"/> when the operator picks it in the list.</summary>
+    [Parameter]
+    public EventCallback<int> FlyToArea { get; set; }
+
+    /// <summary>Called with a limiter's position in <see cref="MapLoot.Limiters"/> when the operator opens it in the list.</summary>
+    [Parameter]
+    public EventCallback<int> FlyToLimiter { get; set; }
+
+    public void Dispose()
+    {
+        Geometry.Changed -= OnGeometryChanged;
+        Options.Changed -= OnOptionsChanged;
+        Session.Changed -= OnSessionChanged;
+    }
+
+    protected override void OnInitialized()
+    {
+        Geometry.Changed += OnGeometryChanged;
+        Options.Changed += OnOptionsChanged;
+        Session.Changed += OnSessionChanged;
+    }
+
+    // Opens a limiter (shown, drawn brighter, framed), or closes the open one.
+    private async Task PickLimiterAsync(int index)
+    {
+        if (index == Options.HighlightedLimiter)
+        {
+            Options.HighlightLimiter(-1);
+            return;
+        }
+
+        Options.SetLimitersVisible(true);
+        Options.HighlightLimiter(index);
+        await FlyToLimiter.InvokeAsync(index);
+    }
+
+    private void OnXrayModeChanged(ChangeEventArgs args)
+    {
+        if (Enum.TryParse(args.Value as string, out XrayMode mode))
+        {
+            Options.SetXrayMode(mode);
+        }
+    }
+
+    private void OnXrayDistanceInput(ChangeEventArgs args)
+    {
+        if (int.TryParse(args.Value as string, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int position))
+        {
+            Options.SetXraySliderPosition(position);
+        }
+    }
+
+    private void OnGeometryChanged(GeometryChanges changes) => _ = InvokeAsync(StateHasChanged);
+
+    private void OnOptionsChanged(SceneOptionChanges changes)
+    {
+        if (changes != SceneOptionChanges.AreaHighlight)
+        {
+            _ = InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void OnSessionChanged(EditorChanges changes)
+    {
+        if ((changes & (EditorChanges.Content | EditorChanges.Workspace | EditorChanges.Map)) != EditorChanges.None)
+        {
+            _ = InvokeAsync(StateHasChanged);
+        }
+    }
+}

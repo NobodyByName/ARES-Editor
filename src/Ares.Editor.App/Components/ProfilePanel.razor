@@ -1,0 +1,237 @@
+@* The contents profile of the selected tag or container class: create, edit or delete it; inherited values are greyed
+   with the profile they come from. *@
+
+@if (Session is { Workspace: { } workspace } && ProfileTarget.Of(Session) is { } target)
+{
+    LootContentsDocument contents = workspace.Contents;
+    LootProfile? profile = target.Own(contents);
+    MergedProfile inherited = target.Inherited(workspace);
+    IReadOnlyList<ContainerItem> items = ProfileTarget.Items(workspace.GameData);
+    IReadOnlyList<string> tiers = [.. contents.Tiers.Select(tier => tier.Name)];
+    <section @key="target" class="inspector-section profile-panel">
+        <header class="section-header">
+            <h2>Contents profile</h2>
+            <button class="quiet" aria-label="Close the profile" @onclick="Close">✕</button>
+        </header>
+        <p class="hint">
+            @(target.Tag is not null ? target.IsLoose ? "Loose item sockets with the tag" : "Containers with the tag" : "Containers of the class")
+            <code>@target.Text</code>@(target.Tag is not null ? " or one below it" : string.Empty).
+        </p>
+        @if (inherited.Chain.Count > 0)
+        {
+            <div class="chips">
+                <span class="muted">Inherits from</span>
+                @foreach (LootProfile above in inherited.Chain)
+                {
+                    <button class="chip link" title="@(above.Tag ?? above.Class)" @onclick="() => Open(above)">@above.Name</button>
+                }
+            </div>
+        }
+
+        @if (profile is null)
+        {
+            <p class="hint">No profile of its own: it uses what is shown below.</p>
+            <button class="quiet add-row" @onclick="() => Create(contents, target)">+ Create a profile</button>
+        }
+        else
+        {
+            <div class="field">
+                <label for="profile-name">Name</label>
+                <input id="profile-name" value="@profile.Name" @onchange="args => Rename(profile, args.Value as string)" />
+            </div>
+            @foreach (ProfileProblem problem in ContentProfiles.Validate(contents, workspace.GameData.Roll).Where(problem => ReferenceEquals(problem.Profile, profile)))
+            {
+                <p class="warning">The server refuses this: @problem.Message.</p>
+            }
+        }
+
+        <datalist id="profile-drop-tags">
+            @foreach (string tag in ProfileTarget.DropTags(workspace.GameData.Roll))
+            {
+                <option value="@tag"></option>
+            }
+        </datalist>
+
+        <h3>Items</h3>
+        <ProfileMatchEditor Session="Session" Profile="profile" Inherited="inherited" Kind="ProfileList.Only" Items="items" Tiers="tiers" DropTagList="profile-drop-tags" />
+        <ProfileMatchEditor Session="Session" Profile="profile" Inherited="inherited" Kind="ProfileList.Weights" Items="items" Tiers="tiers" DropTagList="profile-drop-tags" />
+        <ProfileMatchEditor Session="Session" Profile="profile" Inherited="inherited" Kind="ProfileList.Add" Items="items" Tiers="tiers" DropTagList="profile-drop-tags" />
+
+        <h3>Tiers</h3>
+        <div class="settings-grid">
+            @foreach (string tier in tiers)
+            {
+                double? own = profile?.Tiers.Get(tier);
+                <div class="setting-row">
+                    <span>@tier</span>
+                    <span class="setting-value">
+                        @if (own is not null)
+                        {
+                            <NumberInput Value="own" Optional="true" Min="0" Label="@($"Multiplier of tier {tier}")" Title="Multiplier on the tier's weight; clear to inherit"
+                                         ValueChanged="value => SetTier(profile!, tier, value)" />
+                            <button class="quiet remove" title="Inherit" @onclick="() => SetTier(profile!, tier, null)">✕</button>
+                        }
+                        else
+                        {
+                            <span class="inherited" title="@(inherited.Tiers.TryGetValue(tier, out ProfileValue<double>? tierFrom) ? $"From {tierFrom.Profile.Name}" : "No multiplier: 1")">×@Display.Number(inherited.TierMultiplier(tier))</span>
+                            @if (profile is not null)
+                            {
+                                <button class="quiet add" title="Give this profile its own multiplier" @onclick="() => SetTier(profile, tier, inherited.TierMultiplier(tier))">+</button>
+                            }
+                        }
+                    </span>
+                </div>
+            }
+        </div>
+
+        @if (!target.IsLoose)
+        {
+            <h3>Stacks</h3>
+            <div class="setting-row">
+                <label for="profile-first-tier">First stack tier</label>
+                <select id="profile-first-tier" class="tier-select" disabled="@(profile is null)" @onchange="args => SetFirstTier(profile!, args.Value as string)">
+                    <option value="@InheritValue" selected="@(profile?.SetsFirstStackTier != true)">inherit: @FirstTierText(inherited, contents)</option>
+                    <option value="@OffValue" selected="@(profile is { SetsFirstStackTier: true, FirstStackTier: null })">off</option>
+                    @foreach (string tier in tiers)
+                    {
+                        <option value="@tier" selected="@(profile is { SetsFirstStackTier: true } && profile.FirstStackTier == tier)">@tier</option>
+                    }
+                </select>
+            </div>
+            <div class="setting-row">
+                <label>Stacks</label>
+                @if (profile?.Stacks is { } stacks)
+                {
+                    <span class="range">
+                        <NumberInput Value="stacks.Min" Integer="true" Min="0" Label="Fewest stacks" ValueChanged="value => SetStacks(profile, value, stacks.Max, minChanged: true)" />
+                        <span>to</span>
+                        <NumberInput Value="stacks.Max" Integer="true" Min="0" Label="Most stacks" ValueChanged="value => SetStacks(profile, stacks.Min, value, minChanged: false)" />
+                        <button class="quiet remove" title="Inherit" @onclick="() => Edit(profile.RemoveStacks)">✕</button>
+                    </span>
+                }
+                else
+                {
+                    <span class="setting-value">
+                        <span class="inherited stacks-inherited" title="@(inherited.Stacks is { } stacksFrom ? $"From {stacksFrom.Profile.Name}" : "The pool's range, else the contents file's targets; capped by slots")">
+                            @(inherited.Stacks is { } stacksRange ? Range(stacksRange.Value) : "pool's")
+                        </span>
+                        @if (profile is not null)
+                        {
+                            CountRange start = inherited.Stacks?.Value ?? ContentTargets(workspace.Contents);
+                            <button class="quiet add" title="Give this profile its own number of stacks" @onclick="() => Edit(() => profile.SetStacks(start.Min, start.Max))">+</button>
+                        }
+                    </span>
+                }
+            </div>
+            <ProfileExtraEditor Session="Session" Profile="profile" Inherited="inherited" Root="contents" DropTagList="profile-drop-tags" />
+        }
+        else
+        {
+            <p class="hint">Loose item sockets hold one stack: the first stack tier, the number of stacks and the extra stack do not apply.</p>
+        }
+
+        @if (profile is not null)
+        {
+            <button class="quiet remove add-row" @onclick="() => Delete(contents, profile)">Delete the profile</button>
+        }
+    </section>
+}
+
+@code {
+    private const string InheritValue = "\u0001inherit";
+    private const string OffValue = "\u0001off";
+
+    /// <summary>The editor session.</summary>
+    [Parameter]
+    [EditorRequired]
+    public EditorSession Session { get; set; } = null!;
+
+    private static string Range(CountRange range) => range.Min == range.Max ? Display.Number(range.Min) : $"{Display.Number(range.Min)}–{Display.Number(range.Max)}";
+
+    // The contents file's weighted container targets as a range, to start a profile's own number of stacks from.
+    private static CountRange ContentTargets(LootContentsDocument contents) =>
+        contents.TargetStacks.Count == 0 ? new CountRange(1, 1) : new CountRange(contents.TargetStacks.Min(target => target.Target), contents.TargetStacks.Max(target => target.Target));
+
+    private static string FirstTierText(MergedProfile inherited, LootContentsDocument contents) => inherited.FirstStackTier is { } from
+        ? $"{from.Value ?? "off"} (from {from.Profile.Name})"
+        : contents.FirstStackTier ?? "off";
+
+    private void Edit(Action change)
+    {
+        change();
+        Session.Edited();
+    }
+
+    private void Close()
+    {
+        if (Session.SelectedClass is not null)
+        {
+            Session.SelectClass(null);
+        }
+        else
+        {
+            Session.SelectTag(null);
+        }
+    }
+
+    private void Open(LootProfile profile)
+    {
+        if (profile.Class is { } containerClass)
+        {
+            Session.SelectClass(containerClass);
+        }
+        else if (profile.Tag is { } tag)
+        {
+            Session.SelectTag(tag);
+        }
+    }
+
+    private void Create(LootContentsDocument contents, ProfileTarget target) => Edit(() => contents.AddProfile(target.NewName(contents), target.Tag, target.Class));
+
+    private void Delete(LootContentsDocument contents, LootProfile profile) => Edit(() => contents.RemoveProfile(profile));
+
+    private void Rename(LootProfile profile, string? text)
+    {
+        string name = text?.Trim() ?? string.Empty;
+        if (name.Length > 0 && name != profile.Name)
+        {
+            Edit(() => profile.Name = name);
+        }
+    }
+
+    private void SetTier(LootProfile profile, string tier, double? value) => Edit(() =>
+    {
+        if (value is { } set)
+        {
+            profile.Tiers.Set(tier, set);
+        }
+        else
+        {
+            profile.Tiers.Remove(tier);
+        }
+    });
+
+    private void SetFirstTier(LootProfile profile, string? value) => Edit(() =>
+    {
+        switch (value)
+        {
+            case InheritValue:
+                profile.InheritFirstStackTier();
+                break;
+            case OffValue:
+                profile.SetFirstStackTier(null);
+                break;
+            default:
+                profile.SetFirstStackTier(value);
+                break;
+        }
+    });
+
+    private void SetStacks(LootProfile profile, double? min, double? max, bool minChanged)
+    {
+        if (RuleLootEditor.Range(min, max, minChanged) is { } range)
+        {
+            Edit(() => profile.SetStacks(range.Min, range.Max));
+        }
+    }
+}

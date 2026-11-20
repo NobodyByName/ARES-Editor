@@ -1,0 +1,79 @@
+@* The contents profiles that apply to a container or loose item socket, and the tag levels whose profile can be opened. *@
+
+@{
+    LootContentsDocument contents = Session.Workspace!.Contents;
+    LootProfile[] chain = [.. Tags.SelectMany(tag => ContentProfiles.ChainOf(contents, tag, null))
+        .Concat(Classes.SelectMany(containerClass => ContentProfiles.ChainOf(contents, null, containerClass))).Distinct()];
+}
+<dl class="facts">
+    <dt>Profiles</dt>
+    <dd>
+        @if (chain.Length == 0)
+        {
+            <span class="muted">None: the file's defaults apply.</span>
+        }
+        <span class="chips profile-chain">
+            @foreach (LootProfile profile in chain)
+            {
+                <button class="chip link decides" title="@(profile.Tag ?? profile.Class)" @onclick="() => Open(profile)">@profile.Name</button>
+            }
+        </span>
+        @if (Tags is [{ } single] && Levels(single) is { Count: > 0 } levels)
+        {
+            <span class="chips profile-path">
+                <span class="muted">Open the profile of</span>
+                @foreach (string level in levels)
+                {
+                    bool has = contents.Profiles.Any(profile => profile.Tag is { } own && string.Equals(own, level, StringComparison.OrdinalIgnoreCase));
+                    <button class="chip link @(has ? "decides" : null)" title="@level" @onclick="() => Session.SelectTag(level)">@level[(level.LastIndexOf('.') + 1)..]</button>
+                }
+            </span>
+        }
+    </dd>
+</dl>
+
+@code {
+    /// <summary>The editor session.</summary>
+    [Parameter]
+    [EditorRequired]
+    public EditorSession Session { get; set; } = null!;
+
+    /// <summary>The container or socket tags.</summary>
+    [Parameter]
+    public IReadOnlyList<string> Tags { get; set; } = [];
+
+    /// <summary>The container classes that may stand there (none for a loose item socket).</summary>
+    [Parameter]
+    public IReadOnlyList<string> Classes { get; set; } = [];
+
+    // The tag and the tags above it, from the profiles' root (Socket.LootContainer or Socket.Loot) down.
+    private static List<string> Levels(string tag)
+    {
+        string root = ContentProfiles.IsLooseTag(tag) ? ContentProfiles.LooseRoot : ContentProfiles.ContainerRoot;
+        List<string> levels = [];
+        if (!LootMatching.IsTagOrBelow(tag, root))
+        {
+            return levels;
+        }
+
+        string[] parts = tag.Split('.');
+        for (int depth = root.Split('.').Length; depth <= parts.Length; depth++)
+        {
+            levels.Add(string.Join('.', parts, 0, depth));
+        }
+
+        return levels;
+    }
+
+    private void Open(LootProfile profile)
+    {
+        if (profile.Class is { } containerClass)
+        {
+            Session.SelectClass(containerClass);
+        }
+        else if (profile.Tag is { } tag)
+        {
+            Session.SelectTag(tag);
+        }
+    }
+}

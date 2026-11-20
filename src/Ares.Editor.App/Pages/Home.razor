@@ -1,0 +1,104 @@
+@page "/"
+@implements IAsyncDisposable
+@inject EditorSession Session
+@inject IJSRuntime Js
+
+<div class="editor" @ref="_editor">
+    @if (Session.Error is not null)
+    {
+        <div class="notice error editor-message" role="alert">
+            <span>@Session.Error</span>
+            <button class="quiet" aria-label="Dismiss" @onclick="Session.DismissMessages">✕</button>
+        </div>
+    }
+
+    @if (Session.Workspace is null)
+    {
+        <div class="empty editor-empty">
+            <strong>@(Session.IsOpening ? "Opening the server…" : "No server open")</strong>
+            <span>Choose an ARES-Server folder with “Open server…”, or give the content and game data folders under “Folders…”.</span>
+        </div>
+    }
+    else
+    {
+        <aside class="side left" aria-label="Tags, rules and spawn settings">
+            <TagTreePanel Session="Session" />
+            <RulesPanel Session="Session" />
+            <SpawnSettingsPanel Session="Session" />
+        </aside>
+        <div class="splitter" data-side="left" role="separator" aria-orientation="vertical" aria-label="Resize the left panel"
+             title="Drag to resize, double-click for the default width"></div>
+        <section class="view" aria-label="Map view">
+            <SceneView Session="Session" />
+        </section>
+        <div class="splitter" data-side="right" role="separator" aria-orientation="vertical" aria-label="Resize the inspector"
+             title="Drag to resize, double-click for the default width"></div>
+        <aside class="side right" aria-label="Inspector">
+            <ContainerInspector Session="Session" />
+            <LooseSocketInspector Session="Session" />
+            <ProfilePanel Session="Session" />
+            <RuleInspector Session="Session" />
+        </aside>
+    }
+</div>
+
+@code {
+    private ElementReference _editor;
+    private IJSObjectReference? _splitters;
+    private DotNetObjectReference<Home>? _self;
+
+    /// <summary>Remembers the side panel widths after a splitter drag or reset; null is a panel's default width.</summary>
+    /// <param name="leftWidth">The left panel's width in pixels, or null.</param>
+    /// <param name="rightWidth">The right panel's width in pixels, or null.</param>
+    /// <returns>A task that completes once the widths are saved.</returns>
+    [JSInvokable]
+    public Task OnPanelWidthsChanged(int? leftWidth, int? rightWidth) =>
+        InvokeAsync(() => Session.RememberPanelWidths(leftWidth, rightWidth));
+
+    public async ValueTask DisposeAsync()
+    {
+        Session.Changed -= OnChanged;
+        if (_splitters is not null)
+        {
+            try
+            {
+                await _splitters.InvokeVoidAsync("disposeSplitters");
+                await _splitters.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // The window is closing.
+            }
+        }
+
+        _self?.Dispose();
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Session.Changed += OnChanged;
+        if (Session.Workspace is null)
+        {
+            await Session.OpenRememberedAsync();
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            EditorSettings settings = Session.RememberedSettings();
+            _self = DotNetObjectReference.Create(this);
+            _splitters = await Js.InvokeAsync<IJSObjectReference>("import", "./js/splitters.js");
+            await _splitters.InvokeVoidAsync("initSplitters", _editor, _self, settings.LeftPanelWidth, settings.RightPanelWidth);
+        }
+    }
+
+    private void OnChanged(EditorChanges changes)
+    {
+        if (changes != EditorChanges.Focus)
+        {
+            _ = InvokeAsync(StateHasChanged);
+        }
+    }
+}

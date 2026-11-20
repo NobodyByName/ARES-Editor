@@ -1,0 +1,272 @@
+@* The selected container: what it is, and what the current loot files decide for it and why. *@
+@inject IJSRuntime Js
+
+<section class="inspector-section">
+    @if (Session.SelectedContainer is { } container && Session.SelectedIndex < Session.Matches.Count)
+    {
+        ContainerMatch match = Session.Matches[Session.SelectedIndex];
+        <header class="section-header">
+            <h2>Container</h2>
+            <span class="row">
+                <button class="quiet" @onclick="Session.RequestFocus" title="Fly the view to the container">Focus</button>
+                <button class="quiet" aria-label="Deselect" @onclick="() => Session.SelectContainer(-1)">✕</button>
+            </span>
+        </header>
+        <div class="id-row">
+            <code class="container-id">@container.Id</code>
+            <button class="quiet" title="Copy the id" @onclick="() => CopyAsync(container.Id)">@(_copied == container.Id ? "Copied" : "Copy")</button>
+        </div>
+        <dl class="facts">
+            <dt>Source</dt>
+            <dd>@container.Source</dd>
+            <dt>@(container.Tags.Count == 1 ? "Tag" : "Tags")</dt>
+            <dd>
+                @if (container.Tags.Count == 0)
+                {
+                    <span class="muted">None: no container type lists its class.</span>
+                }
+                @foreach (string tag in container.Tags)
+                {
+                    <button class="chip link" title="Highlight this tag's containers" @onclick="() => Session.SelectTag(tag)">@tag</button>
+                }
+            </dd>
+            <dt>Area</dt>
+            <dd>@container.Area</dd>
+            <dt>Position</dt>
+            <dd>@Display.Location(container.Location)</dd>
+            @if (container.DataLayer is not null)
+            {
+                <dt>Data layer</dt>
+                <dd title="@container.DataLayer">@DataLayerNames.Label(container.DataLayer)</dd>
+            }
+            @if (container.Source == LootContainerSource.Spawner)
+            {
+                <dt>Spawner</dt>
+                <dd>Places @container.SpawnerCount on @Display.Count(container.Points.Count, "point"); position is its first point.</dd>
+            }
+        </dl>
+        @if (container.ClassPaths.Count > 0)
+        {
+            <details class="classes">
+                <summary>@Display.Count(container.ClassPaths.Count, "class")</summary>
+                <ul>
+                    @foreach (string classPath in container.ClassPaths)
+                    {
+                        <li>
+                            <code>@classPath</code>
+                            @if (Session.Workspace!.GameData.Roll.ServedSlots(classPath) is not null)
+                            {
+                                <button class="quiet" title="Open the contents profile of this class" @onclick="() => Session.SelectClass(classPath)">Profile</button>
+                            }
+                        </li>
+                    }
+                </ul>
+            </details>
+            @if (SpawnerChances.Rounds(container) is { Count: > 0 } rounds)
+            {
+                <details class="classes">
+                    <summary>Chance by round</summary>
+                    <ul>
+                        @foreach (string round in rounds)
+                        {
+                            <li>@round: @Display.Percent(SpawnerChances.Chance(container, Session.Workspace!.Spawn, round))</li>
+                        }
+                    </ul>
+                </details>
+            }
+        }
+
+        <h3>Spawning</h3>
+        <div class="decision">
+            <span class="swatch" style="background: @ContainerColoring.ColorOf(ColorMode.SpawnChance, container, match, Session.Workspace!.GameData.TagTree).Css"></span>
+            <strong>@DecisionLabel(match)</strong>
+        </div>
+        <p class="derivation">@Derivation(container, match)</p>
+        @switch (container.Source)
+        {
+            case LootContainerSource.Socket when Session.Map is { } map:
+                <LimiterCaps Map="map" Location="container.Location" Tag="@container.Tags[0]" Enabled="Session.Workspace!.Spawn.Limiters"
+                             RuleDecides="@(match.Decision is SpawnDecision.RuleChance or SpawnDecision.GroupFill)" />
+                break;
+            case LootContainerSource.Spawner:
+                <details class="classes" open="@(container.SpawnerGroups.Count <= 4)">
+                    <summary>@Display.Count(container.SpawnerGroups.Count, "dynamic loot group")</summary>
+                    @if (container.SpawnerGroups.Count == 0)
+                    {
+                        <p class="muted">No group lists this spawner, so it never runs.</p>
+                    }
+                    <ul>
+                        @foreach (SpawnerGroup spawnerGroup in container.SpawnerGroups)
+                        {
+                            <li>
+                                <strong>@string.Join(" › ", spawnerGroup.Path)</strong>
+                                <span class="muted">(@spawnerGroup.Id)</span><br />
+                                Picks @PickRange(spawnerGroup) of @Display.Count(spawnerGroup.Spawners, "spawner")@(spawnerGroup.Choices.Count > 0 ? ", when a random choice above it picks this branch" : string.Empty): @Display.Percent(SpawnerChances.PickChance(spawnerGroup)) this one.<br />
+                                <span class="muted">Rounds: @(spawnerGroup.Rounds.Count == 0 ? "none" : string.Join(", ", spawnerGroup.Rounds))</span>
+                            </li>
+                        }
+                    </ul>
+                </details>
+                break;
+        }
+        <dl class="facts">
+            <dt>Contents</dt>
+            <dd>
+                @if (match.LootRule is { } lootRule)
+                {
+                    <button class="chip link" @onclick="() => Session.SelectRule(lootRule)">@Name(lootRule)</button>
+                }
+                else
+                {
+                    <span class="muted">Default roll</span>
+                }
+            </dd>
+            <dt>Reveal delay</dt>
+            <dd>
+                @if (match.RevealDelayRule is { } revealRule)
+                {
+                    <span>@Display.Number(revealRule.RevealDelaySeconds) s from </span>
+                    <button class="chip link" @onclick="() => Session.SelectRule(revealRule)">@Name(revealRule)</button>
+                }
+                else
+                {
+                    <span class="muted">The container class's own</span>
+                }
+            </dd>
+        </dl>
+        <ProfileChain Session="Session" Tags="container.Tags" Classes="container.ClassPaths" />
+        <ContentOddsPanel Session="Session" Container="container" ContainerMatch="match" />
+
+        @if (Session.FillGroups.GroupOf(Session.SelectedIndex) is { } group)
+        {
+            IReadOnlyList<FillShare> shares = group.Chances;
+            <h3>Group <span class="count">@group.Size</span></h3>
+            <dl class="facts">
+                <dt>Rule</dt>
+                <dd><button class="chip link" @onclick="() => Session.SelectRule(group.Rule)">@Name(group.Rule)</button></dd>
+                <dt>Place</dt>
+                <dd>@FillDisplay.Position(group, Session.SelectedIndex)</dd>
+                <dt>Group</dt>
+                <dd>@FillDisplay.Kind(group)</dd>
+                <dt>Area</dt>
+                <dd>@FillDisplay.Area(group)</dd>
+                <dt>Expected</dt>
+                <dd>≈ @Display.Number(Math.Round(group.ExpectedFilled, 2)) of @group.Size filled per raid</dd>
+            </dl>
+            <table class="grid-table group-chances">
+                <thead><tr><th>Filled</th><th>Chance</th></tr></thead>
+                <tbody>
+                    @foreach (FillShare share in shares)
+                    {
+                        <tr>
+                            <td>@share.Count@(share.Count > group.Size ? $" (all {group.Size})" : null)</td>
+                            <td>@FillDisplay.Percent(share.Percent)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <p class="hint">Each raid the group draws a number, then that many of its sockets at random.</p>
+            <ul class="group-members">
+                @foreach (int member in group.Members)
+                {
+                    LootContainer sibling = Session.Map!.Containers[member];
+                    <li>
+                        <button class="chip link @(member == Session.SelectedIndex ? "decides" : null)" title="@sibling.Id" disabled="@(member == Session.SelectedIndex)"
+                                @onclick="() => Session.FocusContainer(sibling.Id)">@FillDisplay.SocketName(sibling)</button>
+                    </li>
+                }
+            </ul>
+        }
+
+        <h3>Covering rules <span class="count">@match.CoveringRules.Count</span></h3>
+        @if (match.CoveringRules.Count == 0)
+        {
+            <p class="hint">No rule covers this container.</p>
+        }
+        else
+        {
+            <ol class="covering">
+                @foreach (LootRule rule in match.CoveringRules)
+                {
+                    <li>
+                        <button class="chip link @(ReferenceEquals(rule, match.SpawnRule) || ReferenceEquals(rule, match.LootRule) || ReferenceEquals(rule, match.RevealDelayRule) ? "decides" : null)"
+                                @onclick="() => Session.SelectRule(rule)">@Name(rule)</button>
+                    </li>
+                }
+            </ol>
+            <p class="hint">Highlighted rules decide a setting.</p>
+        }
+    }
+    else if (Session.SelectedLooseSocket is null)
+    {
+        <p class="hint">Click a container or loose item socket in the view to inspect it.</p>
+    }
+</section>
+
+@code {
+    private string? _copied;
+
+    /// <summary>The editor session.</summary>
+    [Parameter]
+    [EditorRequired]
+    public EditorSession Session { get; set; } = null!;
+
+    private static string DecisionLabel(ContainerMatch match) => match.Decision switch
+    {
+        SpawnDecision.Default => $"Default chance {Display.Percent(match.Chance ?? 0)}",
+        SpawnDecision.RuleChance => $"Rule chance {Display.Percent(match.Chance ?? 0)}",
+        SpawnDecision.GroupFill => "Group fill",
+        SpawnDecision.SpawnerGroups => $"Spawner chance {Display.Percent(match.Chance ?? 0)} in a {SpawnerChances.DefaultRound} raid",
+        _ => "Never spawns",
+    };
+
+    private string Derivation(LootContainer container, ContainerMatch match)
+    {
+        LootSpawnDocument spawn = Session.Workspace!.Spawn;
+        switch (match.Decision)
+        {
+            case SpawnDecision.Default:
+                string tagPart = match.ChanceTag is null
+                    ? $"No chances entry applies to {container.Tags[0]}, so the tag chance is 0"
+                    : $"Tag chance {Display.Number(match.TagChance ?? 0)} from {match.ChanceTag}";
+                double product = (match.TagChance ?? 0) * match.AreaMultiplier;
+                string cap = product > 1 ? " (capped at 1)" : string.Empty;
+                string limits = container.Source == LootContainerSource.Socket && (spawn.GroupCaps || spawn.Limiters)
+                    ? " Group caps and limiters can still stop it."
+                    : string.Empty;
+                return $"{tagPart} × {container.Area} area multiplier {Display.Number(match.AreaMultiplier)} = {Display.Number(match.Chance ?? 0)}{cap}.{limits}";
+            case SpawnDecision.RuleChance:
+                string socketNote = container.Source == LootContainerSource.Socket ? " Group caps and limiters do not apply." : string.Empty;
+                return $"Rule {Name(match.SpawnRule!)} sets spawnChance {Display.Number(match.SpawnRule!.SpawnChance)}.{socketNote}";
+            case SpawnDecision.GroupFill:
+                LootFillGroup? group = Session.FillGroups.GroupOf(Session.SelectedIndex);
+                string chances = FillDisplay.Chances(group?.Chances ?? GroupFillShares.Of(match.SpawnRule!.GroupFill).Shares);
+                string area = group is { AreaMultiplier: not 1 } ? $" in its {group.Area} area (×{Display.Number(group.AreaMultiplier)} odds per socket)" : string.Empty;
+                return $"Rule {Name(match.SpawnRule!)} draws per group how many of its sockets get loot{area} (filled: {chances}).";
+            case SpawnDecision.SpawnerGroups:
+                int listed = container.SpawnerClasses.Count(entry => spawn.SpawnerClasses.Contains(entry.ClassPath, StringComparer.Ordinal));
+                string placed = listed == 0
+                    ? " None is enabled, so it places nothing even when picked."
+                    : string.Empty;
+                double run = SpawnerChances.RunChance(container, SpawnerChances.DefaultRound);
+                double kept = SpawnerChances.ClassChance(container, spawn);
+                string places = container.SpawnerCount == 1 ? string.Empty : $", for any of its {container.SpawnerCount} draws";
+                return $"Runs in a raid when one of its dynamic loot groups (below) picks it, and places only the classes enabled in the spawn settings' spawner classes: {listed} of its {Display.Count(container.SpawnerClasses.Count, "class")}.{placed} "
+                    + $"In a {SpawnerChances.DefaultRound} raid: picked {Display.Percent(run)} × enabled class drawn {Display.Percent(kept)}{places} = {Display.Percent(match.Chance ?? 0)}.";
+            default:
+                return container.Source == LootContainerSource.Socket
+                    ? "No container type has the socket's tag."
+                    : "No container type lists its class.";
+        }
+    }
+
+    private static string PickRange(SpawnerGroup group) =>
+        group.Min == group.Max ? Display.Number(group.Min) : $"{Display.Number(group.Min)}–{Display.Number(group.Max)}";
+
+    private string Name(LootRule rule) => Display.RuleName(rule, Session.Workspace!.Rules.Rules);
+
+    private async Task CopyAsync(string text)
+    {
+        _copied = await Clipboard.CopyAsync(Js, text) ? text : null;
+    }
+}

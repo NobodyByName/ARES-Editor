@@ -1,0 +1,150 @@
+@* What the selected container or loose item socket holds when it spawns: the server's roll, drawn many times. *@
+
+@if (_rolling)
+{
+    <h3>Contents when it spawns</h3>
+    <p class="hint">Rolling the contents…</p>
+}
+else if (_odds is { } odds)
+{
+    <h3>Contents when it spawns</h3>
+    @foreach (string problem in odds.Problems)
+    {
+        <p class="hint contents-problem">@problem</p>
+    }
+    @foreach (string warning in odds.Warnings)
+    {
+        <p class="hint contents-problem">@warning</p>
+    }
+    @if (odds.Note is { } note)
+    {
+        <p class="hint">@note</p>
+    }
+    else
+    {
+        <p class="derivation">
+            From @(odds.Pools.Count == 1 ? odds.Pools[0].Name : string.Join(", ", odds.Pools.Select(pool => $"{pool.Name} {Display.Percent(pool.Share)}"))).
+            @if (Loose is null)
+            {
+                <span>Stacks: @string.Join(", ", odds.StackCounts.Select(count => $"{count.Name} {Display.Percent(count.Share)}")).</span>
+            }
+        </p>
+        <table class="grid-table contents-odds">
+            <thead><tr><th>From</th><th title="Share of rolls with at least one stack from it">Chance</th><th title="Average stacks from it per roll">Stacks</th></tr></thead>
+            <tbody>
+                @foreach (GroupOdds group in odds.Groups)
+                {
+                    bool open = _open.Contains(group.Group);
+                    <tr class="contents-group" @onclick="() => Toggle(group.Group)" title="Show or hide its items">
+                        <td><span class="contents-caret">@(open ? "▾" : "▸")</span> @group.Group <span class="muted">(@Display.Count(group.Items.Count, "item"))</span></td>
+                        <td>@Percent(group.Chance)</td>
+                        <td>@group.ExpectedStacks.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)</td>
+                    </tr>
+                    @if (open)
+                    {
+                        @foreach (ItemOdds item in group.Items)
+                        {
+                            <tr class="contents-item">
+                                <td title="@(item.Added ? $"{item.Item}, added by a profile" : item.Item)">
+                                    @item.Label
+                                    @if (item.Added)
+                                    {
+                                        <span class="added-mark">added</span>
+                                    }
+                                </td>
+                                <td>@Percent(item.Chance)</td>
+                                <td class="muted">×@(item.MinAmount == item.MaxAmount ? item.MinAmount.ToString(System.Globalization.CultureInfo.InvariantCulture) : $"{item.MinAmount}–{item.MaxAmount}")</td>
+                            </tr>
+                        }
+                    }
+                }
+            </tbody>
+        </table>
+        <p class="hint">
+            Estimated from @odds.Rolls.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) draws of the server's roll with the current
+            (unsaved included) files, given that it spawns. Click a row for its items; the item column shows the stack sizes seen.
+        </p>
+    }
+}
+
+@code {
+    private readonly HashSet<string> _open = new(StringComparer.Ordinal);
+    private ContentOdds? _odds;
+    private bool _rolling;
+    private (string? Id, int Revision) _computedFor;
+
+    /// <summary>The editor session.</summary>
+    [Parameter]
+    [EditorRequired]
+    public EditorSession Session { get; set; } = null!;
+
+    /// <summary>The container to show, with <see cref="ContainerMatch"/>; or null.</summary>
+    [Parameter]
+    public LootContainer? Container { get; set; }
+
+    /// <summary>What the rules decide for <see cref="Container"/>.</summary>
+    [Parameter]
+    public ContainerMatch? ContainerMatch { get; set; }
+
+    /// <summary>The loose item socket to show, with <see cref="LooseMatch"/>; or null.</summary>
+    [Parameter]
+    public LooseItemSocket? Loose { get; set; }
+
+    /// <summary>What the rules decide for <see cref="Loose"/>.</summary>
+    [Parameter]
+    public LooseItemMatch? LooseMatch { get; set; }
+
+    /// <inheritdoc />
+    protected override async Task OnParametersSetAsync()
+    {
+        (string? Id, int Revision) key = (Container?.Id ?? Loose?.Id, Session.Revision);
+        if (key == _computedFor)
+        {
+            return;
+        }
+
+        if (key.Id != _computedFor.Id)
+        {
+            _open.Clear();
+        }
+
+        _computedFor = key;
+        (EditorWorkspace? workspace, LootContainer? container, ContainerMatch? containerMatch, LooseItemSocket? loose, LooseItemMatch? looseMatch) =
+            (Session.Workspace, Container, ContainerMatch, Loose, LooseMatch);
+        if (workspace is null || (container is null || containerMatch is null) && (loose is null || looseMatch is null))
+        {
+            (_odds, _rolling) = (null, false);
+            return;
+        }
+
+        // Thousands of draws take a moment on big pools: roll off the UI thread, and drop the result when the selection
+        // or the content changed meanwhile (an edit during the roll can also make it fail; the next roll replaces it).
+        _rolling = true;
+        ContentOdds? odds = null;
+        try
+        {
+            odds = await Task.Run(() => Session.Rolls is not { } rolls ? null
+                : container is not null ? ContentOdds.ForContainer(workspace.GameData, workspace.Spawn, rolls.Containers, container, containerMatch!)
+                : ContentOdds.ForLoose(rolls.Loose, loose!, looseMatch!));
+        }
+        catch (Exception) when (key != _computedFor)
+        {
+        }
+
+        if (key == _computedFor)
+        {
+            (_odds, _rolling) = (odds, false);
+        }
+    }
+
+    private void Toggle(string group)
+    {
+        if (!_open.Remove(group))
+        {
+            _open.Add(group);
+        }
+    }
+
+    // Percent with one decimal: the estimate is not finer than that.
+    private static string Percent(double chance) => (Math.Round(chance * 100, 1)).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " %";
+}

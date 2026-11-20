@@ -1,0 +1,86 @@
+@* The rules of loot-rules.json in file order (for each setting, the last covering rule wins). *@
+
+<details class="side-section" open>
+    <summary>Rules <span class="count">@Rules.Count</span></summary>
+    <p class="hint">In file order: for each setting, the last rule that covers a container wins.</p>
+    <ol class="rule-list">
+        @for (int index = 0; index < Rules.Count; index++)
+        {
+            LootRule rule = Rules[index];
+            int position = index;
+            bool selected = ReferenceEquals(rule, Session.SelectedRule);
+            <li @key="rule" class="rule-item @(selected ? "selected" : null)" @onclick="() => Session.SelectRule(selected ? null : rule)">
+                <span class="rule-index">#@(position + 1)</span>
+                <span class="rule-text">
+                    <span class="rule-name">@(rule.Name ?? "Unnamed")</span>
+                    <span class="rule-sets">@Summary(rule)</span>
+                </span>
+                @if (selected)
+                {
+                    <span class="rule-actions" @onclick:stopPropagation="true">
+                        <button class="quiet" title="Move up" disabled="@(position == 0)" @onclick="() => Move(position, position - 1)">↑</button>
+                        <button class="quiet" title="Move down" disabled="@(position == Rules.Count - 1)" @onclick="() => Move(position, position + 1)">↓</button>
+                        <button class="quiet remove" title="Delete the rule" @onclick="() => Delete(rule)">✕</button>
+                    </span>
+                }
+            </li>
+        }
+    </ol>
+    <button class="quiet add-row" @onclick="Add">+ Add rule</button>
+</details>
+
+@code {
+    /// <summary>The editor session.</summary>
+    [Parameter]
+    [EditorRequired]
+    public EditorSession Session { get; set; } = null!;
+
+    private ObjectList<LootRule> Rules => Session.Workspace!.Rules.Rules;
+
+    private static string Summary(LootRule rule)
+    {
+        List<string> parts = [];
+        int scope = rule.Tags.Count + rule.Containers.Count;
+        parts.Add(scope == 0 ? "all containers" : $"{Display.Count(rule.Tags.Count, "tag")}, {Display.Count(rule.Containers.Count, "id")}");
+        if (rule.SpawnChance is { } chance)
+        {
+            parts.Add($"chance {Display.Number(chance)}");
+        }
+
+        if (rule.GroupFill.IsSet)
+        {
+            parts.Add("group fill");
+        }
+
+        if (rule.Loot is not null)
+        {
+            parts.Add("loot");
+        }
+
+        if (rule.RevealDelaySeconds is { } delay)
+        {
+            parts.Add($"reveal {Display.Number(delay)} s");
+        }
+
+        return string.Join(" · ", parts);
+    }
+
+    private void Add()
+    {
+        LootRule rule = Session.Workspace!.Rules.AddRule("New rule");
+        Session.Edited();
+        Session.SelectRule(rule);
+    }
+
+    private void Move(int from, int to)
+    {
+        Rules.Move(from, to);
+        Session.Edited();
+    }
+
+    private void Delete(LootRule rule)
+    {
+        Rules.Remove(rule);
+        Session.Edited();
+    }
+}
